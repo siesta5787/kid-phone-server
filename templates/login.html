@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body class="auth-page">
+    <div class="card">
+        <h1>Kid Phone</h1>
+        <p class="subtitle">Sign in to manage your kids' phones</p>
+
+        {% if let Some(e) = error %}
+        <div class="error">{{ e }}</div>
+        {% endif %}
+
+        <form method="post" action="/login">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" autocomplete="username" required autofocus>
+
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" autocomplete="current-password" required>
+
+            <button type="submit">Sign in</button>
+        </form>
+    </div>
+</body>
+</html>

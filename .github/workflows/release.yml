@@ -1,0 +1,51 @@
+name: Release
+
+# Builds a static 64-bit ARM binary (Pi Zero 2 W / DietPi target) whenever a
+# version tag is pushed, and attaches it as a GitHub Release. install.sh /
+# update.sh download it automatically.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Cargo.toml version matches the tag
+        run: |
+          set -euo pipefail
+          CARGO_VERSION="v$(grep -m1 '^version' Cargo.toml | sed -E 's/version = "(.*)"/\1/')"
+          if [ "$CARGO_VERSION" != "${{ github.ref_name }}" ]; then
+            echo "Cargo.toml version ($CARGO_VERSION) doesn't match tag (${{ github.ref_name }})" >&2
+            exit 1
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build (aarch64-unknown-linux-musl)
+        run: cross build --release --locked --target aarch64-unknown-linux-musl
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/aarch64-unknown-linux-musl/release/kid_phone_server dist/
+          cp -r static dist/
+          tar -czf kid-phone-server-aarch64-unknown-linux-musl.tar.gz -C dist .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: kid-phone-server-aarch64-unknown-linux-musl.tar.gz
+          generate_release_notes: true

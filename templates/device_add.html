@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container container-narrow">
+    <h1>Add a device</h1>
+    <form method="post" action="/devices/new">
+        <label for="name">What should we call this phone?</label>
+        <input type="text" id="name" name="name" placeholder="e.g. Ava's phone" required autofocus>
+
+        <button type="submit">Create device</button>
+    </form>
+</main>
+</body>
+</html>

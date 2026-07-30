@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>{{ device.name }}</h1>
+    </div>
+
+    {% if let Some(code) = device.enrollment_code %}
+    <div class="card enrollment-card">
+        <h2>Not enrolled yet</h2>
+        <p>On the phone, open Settings and enter this code:</p>
+        <p class="enrollment-code">{{ code }}</p>
+        <p class="subtitle">This code expires soon. If it stops working before the phone is set up, generate a new one.</p>
+        <form method="post" action="/devices/{{ device.id }}/regenerate-code">
+            <button type="submit" class="button-secondary">Generate new code</button>
+        </form>
+    </div>
+    {% else %}
+    <div class="card">
+        <h2>Status</h2>
+        {% if let Some(status) = latest_status %}
+        <p>Lock state: <strong>{{ status.lock_reason }}</strong></p>
+        <p>Kiosk mode: <strong>{% if status.kiosk_engaged %}Engaged{% else %}Not engaged{% endif %}</strong></p>
+        {% if let Some(v) = status.app_version %}
+        <p>App version: {{ v }}</p>
+        {% endif %}
+        <p class="subtitle">Last reported {{ status.reported_at }}</p>
+        {% else %}
+        <p class="subtitle">No status reported yet.</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <form method="post" action="/devices/{{ device.id }}/policy" class="card">
+        <h2>Kiosk mode</h2>
+        <label class="checkbox-row">
+            <input type="checkbox" name="kiosk_desired" value="on" {% if kiosk_desired %}checked{% endif %}>
+            Restrict this phone to only the apps allowed below, and lock down notifications/recents/settings
+        </label>
+
+        <h2>Allowed apps</h2>
+        {% if apps.is_empty() %}
+        <p class="subtitle">The phone hasn't reported its installed apps yet - once it does, they'll show up here to choose from.</p>
+        {% else %}
+        <div class="app-checkbox-list">
+            {% for app in apps %}
+            <label class="checkbox-row">
+                <input type="checkbox" name="allowed_packages" value="{{ app.package_name }}" {% if app.checked %}checked{% endif %}>
+                {{ app.label }}
+            </label>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <h2>Schedule</h2>
+        <p class="subtitle">Leave a field blank for no restriction at that time.</p>
+        <div class="schedule-grid">
+            <div>
+                <label for="weekday_start">Weekday allowed from</label>
+                <input type="time" id="weekday_start" name="weekday_start" value="{{ weekday_start }}">
+            </div>
+            <div>
+                <label for="weekday_end">until</label>
+                <input type="time" id="weekday_end" name="weekday_end" value="{{ weekday_end }}">
+            </div>
+            <div>
+                <label for="weekend_start">Weekend allowed from</label>
+                <input type="time" id="weekend_start" name="weekend_start" value="{{ weekend_start }}">
+            </div>
+            <div>
+                <label for="weekend_end">until</label>
+                <input type="time" id="weekend_end" name="weekend_end" value="{{ weekend_end }}">
+            </div>
+            <div>
+                <label for="bedtime_start">Bedtime lock from</label>
+                <input type="time" id="bedtime_start" name="bedtime_start" value="{{ bedtime_start }}">
+            </div>
+            <div>
+                <label for="bedtime_end">until</label>
+                <input type="time" id="bedtime_end" name="bedtime_end" value="{{ bedtime_end }}">
+            </div>
+        </div>
+
+        <button type="submit">Save changes</button>
+    </form>
+
+    <form method="post" action="/devices/{{ device.id }}/delete" onsubmit="return confirm('Remove {{ device.name }}? This cannot be undone.');">
+        <button type="submit" class="button-danger">Remove this device</button>
+    </form>
+</main>
+</body>
+</html>
