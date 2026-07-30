@@ -141,8 +141,7 @@ async fn main() {
         .route("/backups/create", post(handlers::backups::create_backup))
         .route(
             "/backups/upload",
-            post(handlers::backups::upload_backup)
-                .layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
+            post(handlers::backups::upload_backup).layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
         )
         .route(
             "/backups/{filename}/download",
@@ -156,11 +155,23 @@ async fn main() {
             "/backups/{filename}/restore",
             post(handlers::backups::restore_backup),
         )
-        .route("/backups/schedule", post(handlers::backups::save_backup_schedule))
-        .route("/backups/format-drive", post(handlers::backups::format_drive))
+        .route(
+            "/backups/schedule",
+            post(handlers::backups::save_backup_schedule),
+        )
+        .route(
+            "/backups/format-drive",
+            post(handlers::backups::format_drive),
+        )
         .route("/updates", get(handlers::updates::show_updates_page))
-        .route("/update/trigger", post(handlers::system_update::trigger_update))
-        .route("/update/restart", post(handlers::system_update::trigger_restart))
+        .route(
+            "/update/trigger",
+            post(handlers::system_update::trigger_update),
+        )
+        .route(
+            "/update/restart",
+            post(handlers::system_update::trigger_restart),
+        )
         .route(
             "/update/schedule",
             post(handlers::system_update::save_app_update_schedule),
@@ -177,8 +188,14 @@ async fn main() {
             "/system/tailscale/update",
             post(handlers::system_maintenance::trigger_tailscale_update),
         )
-        .route("/system/reboot", post(handlers::system_maintenance::trigger_reboot))
-        .route("/system/schedule", post(handlers::system_maintenance::save_schedule))
+        .route(
+            "/system/reboot",
+            post(handlers::system_maintenance::trigger_reboot),
+        )
+        .route(
+            "/system/schedule",
+            post(handlers::system_maintenance::save_schedule),
+        )
         .route("/security", get(handlers::admin::security_log))
         .route("/security/unban/{ip}", post(handlers::admin::unban_ip))
         .route("/account", get(handlers::auth::account_page))

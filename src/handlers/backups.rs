@@ -828,9 +828,12 @@ pub async fn upload_backup(mut multipart: axum::extract::Multipart) -> impl Into
     }
 
     if tokio::fs::create_dir_all(BACKUP_DIR).await.is_err() {
-        return render_backups(None, Some("Couldn't create the backups folder.".to_string()))
-            .await
-            .into_response();
+        return render_backups(
+            None,
+            Some("Couldn't create the backups folder.".to_string()),
+        )
+        .await
+        .into_response();
     }
 
     let nanos = std::time::SystemTime::now()

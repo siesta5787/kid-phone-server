@@ -340,12 +340,13 @@ pub async fn update_policy(
     // actually typed a new PIN or explicitly asked to clear it, so blank
     // fields on an unrelated save can't silently wipe an already-configured
     // PIN.
-    let current = sqlx::query_as::<_, DevicePolicy>("SELECT * FROM device_policy WHERE device_id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
+    let current =
+        sqlx::query_as::<_, DevicePolicy>("SELECT * FROM device_policy WHERE device_id = ?")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
     let current_pin = current.as_ref().and_then(|p| p.override_pin_hash.clone());
     let current_salt = current.as_ref().and_then(|p| p.override_pin_salt.clone());
 

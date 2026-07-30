@@ -13,8 +13,7 @@ use crate::security::{self, CurrentAdmin};
 
 const BANNED_MESSAGE: &str =
     "Too many failed attempts from your network. Try again in about an hour.";
-const LOCKED_MESSAGE: &str =
-    "This account is temporarily locked after too many failed attempts. Try again in about 15 minutes.";
+const LOCKED_MESSAGE: &str = "This account is temporarily locked after too many failed attempts. Try again in about 15 minutes.";
 
 #[derive(Template)]
 #[template(path = "login.html")]
@@ -455,7 +454,11 @@ struct AccountTemplate {
     success: Option<String>,
 }
 
-fn render_account(admin: &AdminUser, error: Option<String>, success: Option<String>) -> Html<String> {
+fn render_account(
+    admin: &AdminUser,
+    error: Option<String>,
+    success: Option<String>,
+) -> Html<String> {
     Html(
         AccountTemplate {
             title: "Account".to_string(),
@@ -469,7 +472,9 @@ fn render_account(admin: &AdminUser, error: Option<String>, success: Option<Stri
     )
 }
 
-pub async fn account_page(Extension(CurrentAdmin(admin)): Extension<CurrentAdmin>) -> impl IntoResponse {
+pub async fn account_page(
+    Extension(CurrentAdmin(admin)): Extension<CurrentAdmin>,
+) -> impl IntoResponse {
     render_account(&admin, None, None)
 }
 

@@ -174,11 +174,13 @@ pub async fn record_failed_login(db: &sqlx::SqlitePool, admin_id: i64) {
         return;
     }
 
-    sqlx::query("UPDATE admin_users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = ?")
-        .bind(admin_id)
-        .execute(db)
-        .await
-        .ok();
+    sqlx::query(
+        "UPDATE admin_users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = ?",
+    )
+    .bind(admin_id)
+    .execute(db)
+    .await
+    .ok();
 
     let attempts: i64 =
         sqlx::query_scalar("SELECT failed_login_attempts FROM admin_users WHERE id = ?")
@@ -198,11 +200,13 @@ pub async fn record_failed_login(db: &sqlx::SqlitePool, admin_id: i64) {
 }
 
 pub async fn reset_failed_login(db: &sqlx::SqlitePool, admin_id: i64) {
-    sqlx::query("UPDATE admin_users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?")
-        .bind(admin_id)
-        .execute(db)
-        .await
-        .ok();
+    sqlx::query(
+        "UPDATE admin_users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
+    )
+    .bind(admin_id)
+    .execute(db)
+    .await
+    .ok();
 }
 
 /// Builds a TOTP object for a given admin from a stored (or freshly
@@ -375,9 +379,7 @@ pub async fn require_full_auth(
         Some(admin) if admin.must_change_password => {
             Redirect::to("/auth/change-password").into_response()
         }
-        Some(admin) if !admin.totp_enabled => {
-            Redirect::to("/auth/setup-2fa").into_response()
-        }
+        Some(admin) if !admin.totp_enabled => Redirect::to("/auth/setup-2fa").into_response(),
         Some(admin) => {
             request.extensions_mut().insert(CurrentAdmin(admin));
             next.run(request).await

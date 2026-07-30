@@ -129,13 +129,11 @@ pub async fn status(
 }
 
 async fn latest_release(state: &AppState) -> Option<LauncherRelease> {
-    sqlx::query_as::<_, LauncherRelease>(
-        "SELECT * FROM launcher_releases ORDER BY id DESC LIMIT 1",
-    )
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten()
+    sqlx::query_as::<_, LauncherRelease>("SELECT * FROM launcher_releases ORDER BY id DESC LIMIT 1")
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
 }
 
 pub async fn launcher_update(

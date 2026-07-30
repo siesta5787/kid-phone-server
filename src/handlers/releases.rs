@@ -22,12 +22,11 @@ pub async fn list_releases(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn render(state: &AppState, error: Option<String>) -> axum::response::Response {
-    let releases = sqlx::query_as::<_, LauncherRelease>(
-        "SELECT * FROM launcher_releases ORDER BY id DESC",
-    )
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    let releases =
+        sqlx::query_as::<_, LauncherRelease>("SELECT * FROM launcher_releases ORDER BY id DESC")
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default();
 
     let mut releases = releases.into_iter();
     let current = releases.next();
@@ -99,7 +98,11 @@ pub async fn upload_release(
     let filename = random_filename();
     let file_path = format!("{RELEASES_DIR}/{filename}");
     if tokio::fs::write(&file_path, &apk_bytes).await.is_err() {
-        return render(&state, Some("Failed to save the uploaded file.".to_string())).await;
+        return render(
+            &state,
+            Some("Failed to save the uploaded file.".to_string()),
+        )
+        .await;
     }
 
     sqlx::query(
