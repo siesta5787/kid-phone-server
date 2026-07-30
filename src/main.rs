@@ -181,6 +181,12 @@ async fn main() {
         .route("/system/schedule", post(handlers::system_maintenance::save_schedule))
         .route("/security", get(handlers::admin::security_log))
         .route("/security/unban/{ip}", post(handlers::admin::unban_ip))
+        .route("/account", get(handlers::auth::account_page))
+        .route(
+            "/account/password",
+            post(handlers::auth::update_account_password),
+        )
+        .route("/account/reset-2fa", post(handlers::auth::reset_totp))
         .layer(from_fn_with_state(
             state.clone(),
             security::require_full_auth,

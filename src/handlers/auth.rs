@@ -439,3 +439,108 @@ pub async fn setup_2fa_verify(
 
     Redirect::to("/").into_response()
 }
+
+/// Voluntary account settings, reachable any time from the nav (unlike
+/// `/auth/change-password` and `/auth/setup-2fa` above, which are only ever
+/// reached as forced onboarding steps and bounce back to `/` once already
+/// satisfied). Lets an admin change their password whenever they want, and
+/// recover from a lost authenticator app by resetting 2FA and re-enrolling.
+#[derive(Template)]
+#[template(path = "account.html")]
+struct AccountTemplate {
+    title: String,
+    username: String,
+    totp_enabled: bool,
+    error: Option<String>,
+    success: Option<String>,
+}
+
+fn render_account(admin: &AdminUser, error: Option<String>, success: Option<String>) -> Html<String> {
+    Html(
+        AccountTemplate {
+            title: "Account".to_string(),
+            username: admin.username.clone(),
+            totp_enabled: admin.totp_enabled,
+            error,
+            success,
+        }
+        .render()
+        .unwrap(),
+    )
+}
+
+pub async fn account_page(Extension(CurrentAdmin(admin)): Extension<CurrentAdmin>) -> impl IntoResponse {
+    render_account(&admin, None, None)
+}
+
+#[derive(Deserialize)]
+pub struct UpdatePasswordForm {
+    current_password: String,
+    new_password: String,
+    confirm_password: String,
+}
+
+pub async fn update_account_password(
+    State(state): State<AppState>,
+    Extension(CurrentAdmin(admin)): Extension<CurrentAdmin>,
+    Form(form): Form<UpdatePasswordForm>,
+) -> impl IntoResponse {
+    if !security::verify_password(&form.current_password, &admin.password_hash) {
+        return render_account(
+            &admin,
+            Some("Current password is incorrect.".to_string()),
+            None,
+        );
+    }
+    if form.new_password.len() < security::MIN_PASSWORD_LEN {
+        return render_account(
+            &admin,
+            Some("New password must be at least 12 characters.".to_string()),
+            None,
+        );
+    }
+    if form.new_password != form.confirm_password {
+        return render_account(&admin, Some("New passwords don't match.".to_string()), None);
+    }
+
+    let new_hash = security::hash_password(&form.new_password);
+    sqlx::query("UPDATE admin_users SET password_hash = ? WHERE id = ?")
+        .bind(&new_hash)
+        .bind(admin.id)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    security::record_security_event(
+        &state.db,
+        "password_changed",
+        Some(&admin.username),
+        None,
+        None,
+    )
+    .await;
+
+    render_account(&admin, None, Some("Password changed.".to_string()))
+}
+
+/// Clears the stored TOTP secret and drops `totp_enabled`, which sends the
+/// admin straight back through mandatory 2FA setup (`require_full_auth`
+/// redirects there for any account with `totp_enabled = false`) with a
+/// brand-new QR code - the recovery path for a lost/uninstalled
+/// authenticator app, since there's no other way back in once the old
+/// secret is unusable.
+pub async fn reset_totp(
+    State(state): State<AppState>,
+    Extension(CurrentAdmin(admin)): Extension<CurrentAdmin>,
+) -> impl IntoResponse {
+    sqlx::query("UPDATE admin_users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?")
+        .bind(admin.id)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    security::record_security_event(&state.db, "totp_reset", Some(&admin.username), None, None)
+        .await;
+
+    Redirect::to("/auth/setup-2fa")
+}

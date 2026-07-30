@@ -57,12 +57,16 @@
                     <td>{{ b.created_display }}</td>
                     <td class="admin-actions">
                         <a href="/backups/{{ b.filename }}/download" class="button-small">Download</a>
-                        <form method="post" action="/backups/{{ b.filename }}/delete" onsubmit="return confirm('Delete this backup? This can\'t be undone.');">
-                            <button type="submit" class="button-small button-danger">Delete</button>
-                        </form>
+                        <details style="display:inline-block;">
+                            <summary class="button-small button-danger" style="display:inline-block; cursor:pointer;">Delete&hellip;</summary>
+                            <form method="post" action="/backups/{{ b.filename }}/delete" style="margin-top:8px; min-width:200px;">
+                                <div class="error" style="margin-bottom:8px;">Delete this backup? This can't be undone.</div>
+                                <button type="submit" class="button-small button-danger">Yes, delete it</button>
+                            </form>
+                        </details>
                         <details style="display:inline-block;">
                             <summary class="button-small button-secondary" style="display:inline-block; cursor:pointer;">Restore&hellip;</summary>
-                            <form method="post" action="/backups/{{ b.filename }}/restore" onsubmit="return confirm('This replaces everything currently in the app with this backup. Are you absolutely sure?');" style="margin-top:8px; min-width:280px;">
+                            <form method="post" action="/backups/{{ b.filename }}/restore" style="margin-top:8px; min-width:280px;">
                                 <div class="error" style="margin-bottom:8px;">This stops the app, replaces the live database with this backup, and restarts it. Whatever is currently live will be overwritten (a safety copy of it is kept automatically, but this still can't be casually undone).</div>
                                 <label for="confirm_{{ b.filename }}">Type the filename ({{ b.filename }}) to confirm</label>
                                 <input type="text" id="confirm_{{ b.filename }}" name="confirm_filename" placeholder="{{ b.filename }}">
@@ -129,7 +133,7 @@
         {% for d in removable_drives %}
         <div class="drive-card">
             <p><strong>{{ d.device }}</strong> &middot; {{ d.size_display }}</p>
-            <form method="post" action="/backups/format-drive" onsubmit="return confirm('This permanently erases everything on {{ d.device }}. Are you absolutely sure?');">
+            <form method="post" action="/backups/format-drive">
                 <input type="hidden" name="device" value="{{ d.device }}">
                 <label for="confirm_{{ d.device }}">Type the size shown above ({{ d.size_display }}) to confirm</label>
                 <input type="text" id="confirm_{{ d.device }}" name="confirm_size" placeholder="{{ d.size_display }}">

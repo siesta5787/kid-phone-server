@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container container-narrow">
+    <div class="page-header">
+        <h1>Account</h1>
+    </div>
+
+    {% if let Some(s) = success %}
+    <div class="success">{{ s }}</div>
+    {% endif %}
+    {% if let Some(e) = error %}
+    <div class="error">{{ e }}</div>
+    {% endif %}
+
+    <div class="card">
+        <h2>Change password</h2>
+        <p class="subtitle">Signed in as <strong>{{ username }}</strong>.</p>
+        <form method="post" action="/account/password">
+            <label for="current_password">Current password</label>
+            <input type="password" id="current_password" name="current_password" autocomplete="current-password" required>
+
+            <label for="new_password">New password</label>
+            <input type="password" id="new_password" name="new_password" autocomplete="new-password" minlength="12" required>
+
+            <label for="confirm_password">Confirm new password</label>
+            <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password" minlength="12" required>
+
+            <button type="submit">Change password</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Two-factor login</h2>
+        {% if totp_enabled %}
+        <p class="subtitle">Two-factor login is turned on.</p>
+        <details>
+            <summary class="button-danger" style="display:inline-block; cursor:pointer; list-style:none;">Reset two-factor login&hellip;</summary>
+            <form method="post" action="/account/reset-2fa" style="margin-top:12px;">
+                <div class="error">If you've lost access to your authenticator app, resetting starts over with a brand-new QR code — you'll be sent straight to scan and verify it, and won't be able to use the rest of the site until you do.</div>
+                <button type="submit" class="button-danger">Reset two-factor login</button>
+            </form>
+        </details>
+        {% else %}
+        <p class="subtitle">Two-factor login isn't set up yet.</p>
+        {% endif %}
+    </div>
+</main>
+</body>
+</html>

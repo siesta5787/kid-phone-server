@@ -44,9 +44,12 @@
         {% for release in history %}
         <div class="release-row">
             <span>{{ release.version_name }} (code {{ release.version_code }}) - {{ release.uploaded_at }}</span>
-            <form method="post" action="/releases/{{ release.id }}/delete" onsubmit="return confirm('Delete this upload?');">
-                <button type="submit" class="button-danger">Delete</button>
-            </form>
+            <details style="display:inline-block;">
+                <summary class="button-danger" style="display:inline-block; cursor:pointer; list-style:none;">Delete&hellip;</summary>
+                <form method="post" action="/releases/{{ release.id }}/delete" style="margin-top:8px;">
+                    <button type="submit" class="button-danger">Yes, delete this upload</button>
+                </form>
+            </details>
         </div>
         {% endfor %}
     </div>

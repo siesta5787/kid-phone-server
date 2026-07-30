@@ -42,14 +42,21 @@
         {% endif %}
 
         {% if app.update_available || app.check_failed %}
-        <form method="post" action="/update/trigger" onsubmit="return confirm('Download and install the latest version? The app will restart automatically — this can take about a minute.');">
-            <button type="submit">Update now</button>
-        </form>
+        <details>
+            <summary class="button" style="display:inline-block; cursor:pointer; list-style:none;">Update now&hellip;</summary>
+            <form method="post" action="/update/trigger" style="margin-top:8px;">
+                <div class="error" style="margin-bottom:8px;">Download and install the latest version? The app will restart automatically — this can take about a minute.</div>
+                <button type="submit">Yes, update now</button>
+            </form>
+        </details>
         {% endif %}
 
-        <form method="post" action="/update/restart" onsubmit="return confirm('Restart the app now?');" style="margin-top:8px;">
-            <button type="submit" class="button-secondary">Restart app</button>
-        </form>
+        <details style="margin-top:8px;">
+            <summary class="button-secondary" style="display:inline-block; cursor:pointer; list-style:none;">Restart app&hellip;</summary>
+            <form method="post" action="/update/restart" style="margin-top:8px;">
+                <button type="submit" class="button-secondary">Yes, restart now</button>
+            </form>
+        </details>
     </div>
 
     {% if os.watcher_busy %}
@@ -79,13 +86,20 @@
             <form method="post" action="/system/os/check">
                 <button type="submit" class="button-small" {% if os.watcher_busy %}disabled{% endif %}>Check for updates</button>
             </form>
-            <form method="post" action="/system/os/upgrade" onsubmit="return confirm('Install all available OS package updates now?');">
-                <button type="submit" class="button-small" {% if os.watcher_busy %}disabled{% endif %}>Install updates now</button>
-            </form>
+            <details style="display:inline-block;">
+                <summary class="button-small button-secondary" style="display:inline-block; cursor:pointer;">Install updates now&hellip;</summary>
+                <form method="post" action="/system/os/upgrade" style="margin-top:8px; min-width:220px;">
+                    <button type="submit" class="button-small" {% if os.watcher_busy %}disabled{% endif %}>Yes, install updates now</button>
+                </form>
+            </details>
             {% if os.reboot_required %}
-            <form method="post" action="/system/reboot" onsubmit="return confirm('Reboot the Pi now? The app will be unreachable for about a minute.');">
-                <button type="submit" class="button-small button-danger" {% if os.watcher_busy %}disabled{% endif %}>Reboot now</button>
-            </form>
+            <details style="display:inline-block;">
+                <summary class="button-small button-danger" style="display:inline-block; cursor:pointer;">Reboot now&hellip;</summary>
+                <form method="post" action="/system/reboot" style="margin-top:8px; min-width:220px;">
+                    <div class="error" style="margin-bottom:8px;">The app will be unreachable for about a minute.</div>
+                    <button type="submit" class="button-small button-danger" {% if os.watcher_busy %}disabled{% endif %}>Yes, reboot now</button>
+                </form>
+            </details>
             {% endif %}
         </div>
     </div>
