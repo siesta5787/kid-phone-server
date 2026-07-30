@@ -6,6 +6,10 @@ pub struct AdminUser {
     pub username: String,
     pub password_hash: String,
     pub must_change_password: bool,
+    pub totp_secret: Option<String>,
+    pub totp_enabled: bool,
+    pub failed_login_attempts: i64,
+    pub locked_until: Option<String>,
 }
 
 #[derive(sqlx::FromRow, Clone)]
@@ -43,6 +47,23 @@ pub struct DeviceStatus {
     pub app_version: Option<String>,
     pub app_version_code: Option<i64>,
     pub reported_at: String,
+}
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct SecurityEvent {
+    pub id: i64,
+    pub event_type: String,
+    pub username: Option<String>,
+    pub ip_address: Option<String>,
+    pub detail: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct BannedIp {
+    pub ip_address: String,
+    pub banned_until: String,
+    pub reason: Option<String>,
 }
 
 #[derive(sqlx::FromRow, Clone)]

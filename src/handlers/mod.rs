@@ -1,4 +1,9 @@
+pub mod admin;
 pub mod auth;
+pub mod backups;
 pub mod device_api;
 pub mod devices;
 pub mod releases;
+pub mod system_maintenance;
+pub mod system_update;
+pub mod updates;

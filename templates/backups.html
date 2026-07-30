@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>Backups</h1>
+    </div>
+
+    {% if let Some(s) = success %}
+    <div class="success">{{ s }}</div>
+    {% endif %}
+    {% if let Some(e) = error %}
+    <div class="error">{{ e }}</div>
+    {% endif %}
+
+    <div class="card">
+        <p class="subtitle">A backup is a snapshot of the whole database, zipped into one file. Download a copy somewhere off the Pi's SD card every so often.</p>
+
+        <form method="post" action="/backups/create">
+            <button type="submit">Create backup now</button>
+        </form>
+
+        <details style="margin-top:16px;">
+            <summary class="button-small button-secondary" style="list-style:none; display:inline-block; cursor:pointer;">Upload a backup from elsewhere&hellip;</summary>
+            <form method="post" action="/backups/upload" enctype="multipart/form-data" style="margin-top:12px; max-width:420px;">
+                <label for="backup_file">Backup .zip file (e.g. one downloaded earlier, or recovered from an external drive)</label>
+                <input type="file" id="backup_file" name="file" accept=".zip" style="margin-bottom:12px;">
+                <button type="submit" class="button-small">Upload</button>
+            </form>
+        </details>
+    </div>
+
+    <div class="card">
+        <h2>Existing backups</h2>
+        {% if backups.is_empty() %}
+        <p class="empty-state">No backups yet.</p>
+        {% else %}
+        <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>Size</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for b in backups %}
+                <tr>
+                    <td>{{ b.filename }}</td>
+                    <td>{{ b.size_display }}</td>
+                    <td>{{ b.created_display }}</td>
+                    <td class="admin-actions">
+                        <a href="/backups/{{ b.filename }}/download" class="button-small">Download</a>
+                        <form method="post" action="/backups/{{ b.filename }}/delete" onsubmit="return confirm('Delete this backup? This can\'t be undone.');">
+                            <button type="submit" class="button-small button-danger">Delete</button>
+                        </form>
+                        <details style="display:inline-block;">
+                            <summary class="button-small button-secondary" style="display:inline-block; cursor:pointer;">Restore&hellip;</summary>
+                            <form method="post" action="/backups/{{ b.filename }}/restore" onsubmit="return confirm('This replaces everything currently in the app with this backup. Are you absolutely sure?');" style="margin-top:8px; min-width:280px;">
+                                <div class="error" style="margin-bottom:8px;">This stops the app, replaces the live database with this backup, and restarts it. Whatever is currently live will be overwritten (a safety copy of it is kept automatically, but this still can't be casually undone).</div>
+                                <label for="confirm_{{ b.filename }}">Type the filename ({{ b.filename }}) to confirm</label>
+                                <input type="text" id="confirm_{{ b.filename }}" name="confirm_filename" placeholder="{{ b.filename }}">
+                                <button type="submit" class="button-small button-danger">Restore this backup</button>
+                            </form>
+                        </details>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2 class="section-title" style="margin-top:0;">Scheduled backups</h2>
+        <p class="subtitle">Automatically create a backup on this schedule, and optionally keep a second copy on an external drive.</p>
+        <div class="success"><strong>Currently scheduled:</strong> {{ schedule_summary }}</div>
+        <p class="hint">External drive at {{ external_mount }}: {% if external_drive_mounted %}<strong>connected</strong>{% else %}not connected{% endif %}</p>
+
+        <form method="post" action="/backups/schedule" style="max-width:420px;">
+            <label for="frequency">How often</label>
+            <select id="frequency" name="frequency" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text); margin-bottom:16px;">
+                <option value="daily" {% if schedule.frequency == "daily" %}selected{% endif %}>Daily</option>
+                <option value="weekly" {% if schedule.frequency == "weekly" %}selected{% endif %}>Weekly</option>
+                <option value="monthly" {% if schedule.frequency == "monthly" %}selected{% endif %}>Monthly</option>
+            </select>
+
+            <label for="day_of_week">Day of week (used if weekly)</label>
+            <select id="day_of_week" name="day_of_week" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text); margin-bottom:16px;">
+                <option value="0" {% if schedule.day_of_week == "0" %}selected{% endif %}>Sunday</option>
+                <option value="1" {% if schedule.day_of_week == "1" %}selected{% endif %}>Monday</option>
+                <option value="2" {% if schedule.day_of_week == "2" %}selected{% endif %}>Tuesday</option>
+                <option value="3" {% if schedule.day_of_week == "3" %}selected{% endif %}>Wednesday</option>
+                <option value="4" {% if schedule.day_of_week == "4" %}selected{% endif %}>Thursday</option>
+                <option value="5" {% if schedule.day_of_week == "5" %}selected{% endif %}>Friday</option>
+                <option value="6" {% if schedule.day_of_week == "6" %}selected{% endif %}>Saturday</option>
+            </select>
+
+            <label for="day_of_month">Day of month (used if monthly, 1-28)</label>
+            <input type="number" id="day_of_month" name="day_of_month" min="1" max="28" value="{{ schedule.day_of_month }}">
+
+            <label for="backup_time">Time</label>
+            <input type="time" id="backup_time" name="backup_time" value="{{ schedule.backup_time }}">
+
+            <label for="retention_count">Keep this many backups (older ones are deleted automatically, 0 = keep all)</label>
+            <input type="number" id="retention_count" name="retention_count" min="0" max="3650" value="{{ schedule.retention_count }}">
+
+            <label class="checkbox-row"><input type="checkbox" name="external_copy_enabled" value="1" {% if schedule.external_copy_enabled %}checked{% endif %}> Also copy backups to the external drive at {{ external_mount }}, if connected</label>
+
+            <label class="checkbox-row"><input type="checkbox" name="continuous_mirror_enabled" value="1" {% if schedule.continuous_mirror_enabled %}checked{% endif %}> Continuously mirror live data to the external drive every 1-2 minutes (a much tighter recovery window than the snapshots above, same external drive)</label>
+
+            <button type="submit" style="margin-top:8px;">Save schedule</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2 class="section-title" style="margin-top:0;">External drive</h2>
+        {% if removable_drives.is_empty() %}
+        <p class="empty-state">No removable (USB) drives detected. Plug one in, then refresh this page.</p>
+        {% else %}
+        <p class="subtitle">Formatting erases everything on the drive and prepares it for use as the backup destination above.</p>
+        {% for d in removable_drives %}
+        <div class="drive-card">
+            <p><strong>{{ d.device }}</strong> &middot; {{ d.size_display }}</p>
+            <form method="post" action="/backups/format-drive" onsubmit="return confirm('This permanently erases everything on {{ d.device }}. Are you absolutely sure?');">
+                <input type="hidden" name="device" value="{{ d.device }}">
+                <label for="confirm_{{ d.device }}">Type the size shown above ({{ d.size_display }}) to confirm</label>
+                <input type="text" id="confirm_{{ d.device }}" name="confirm_size" placeholder="{{ d.size_display }}">
+                <div class="error">This cannot be undone. Everything currently on {{ d.device }} will be permanently erased.</div>
+                <button type="submit" class="button-danger">Format {{ d.device }}</button>
+            </form>
+        </div>
+        {% endfor %}
+        {% endif %}
+    </div>
+</main>
+</body>
+</html>

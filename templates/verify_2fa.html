@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body class="auth-page">
+    <div class="card">
+        <h1>Verify your code</h1>
+        <p class="subtitle">Enter the 6-digit code from your authenticator app.</p>
+
+        {% if let Some(e) = error %}
+        <div class="error">{{ e }}</div>
+        {% endif %}
+
+        <form method="post" action="/auth/verify-2fa">
+            <label for="code">6-digit code</label>
+            <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus>
+
+            <button type="submit">Verify</button>
+        </form>
+    </div>
+</body>
+</html>

@@ -83,18 +83,27 @@ async fn main() {
     let state = AppState { db };
 
     // Reachable without any session at all.
-    let public_routes = Router::new().route(
-        "/login",
-        get(handlers::auth::login_form).post(handlers::auth::login),
-    );
+    let public_routes = Router::new()
+        .route(
+            "/login",
+            get(handlers::auth::login_form).post(handlers::auth::login),
+        )
+        .route(
+            "/auth/verify-2fa",
+            get(handlers::auth::verify_2fa_form).post(handlers::auth::verify_2fa),
+        );
 
     // Reachable with a valid session, even mid-onboarding (forced password
-    // change) - this route IS the onboarding gate, so it can't itself
-    // require onboarding to be complete.
+    // change / mandatory 2FA setup) - these routes ARE the onboarding gate,
+    // so they can't themselves require onboarding to be complete.
     let onboarding_routes = Router::new()
         .route(
             "/auth/change-password",
             get(handlers::auth::change_password_form).post(handlers::auth::change_password),
+        )
+        .route(
+            "/auth/setup-2fa",
+            get(handlers::auth::setup_2fa_form).post(handlers::auth::setup_2fa_verify),
         )
         .route("/logout", post(handlers::auth::logout))
         .layer(from_fn_with_state(state.clone(), security::require_session));
@@ -128,6 +137,50 @@ async fn main() {
             "/releases/{id}/delete",
             post(handlers::releases::delete_release),
         )
+        .route("/backups", get(handlers::backups::list_backups))
+        .route("/backups/create", post(handlers::backups::create_backup))
+        .route(
+            "/backups/upload",
+            post(handlers::backups::upload_backup)
+                .layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
+        )
+        .route(
+            "/backups/{filename}/download",
+            get(handlers::backups::download_backup),
+        )
+        .route(
+            "/backups/{filename}/delete",
+            post(handlers::backups::delete_backup),
+        )
+        .route(
+            "/backups/{filename}/restore",
+            post(handlers::backups::restore_backup),
+        )
+        .route("/backups/schedule", post(handlers::backups::save_backup_schedule))
+        .route("/backups/format-drive", post(handlers::backups::format_drive))
+        .route("/updates", get(handlers::updates::show_updates_page))
+        .route("/update/trigger", post(handlers::system_update::trigger_update))
+        .route("/update/restart", post(handlers::system_update::trigger_restart))
+        .route(
+            "/update/schedule",
+            post(handlers::system_update::save_app_update_schedule),
+        )
+        .route(
+            "/system/os/check",
+            post(handlers::system_maintenance::trigger_os_check),
+        )
+        .route(
+            "/system/os/upgrade",
+            post(handlers::system_maintenance::trigger_os_upgrade),
+        )
+        .route(
+            "/system/tailscale/update",
+            post(handlers::system_maintenance::trigger_tailscale_update),
+        )
+        .route("/system/reboot", post(handlers::system_maintenance::trigger_reboot))
+        .route("/system/schedule", post(handlers::system_maintenance::save_schedule))
+        .route("/security", get(handlers::admin::security_log))
+        .route("/security/unban/{ip}", post(handlers::admin::unban_ip))
         .layer(from_fn_with_state(
             state.clone(),
             security::require_full_auth,
@@ -155,6 +208,12 @@ async fn main() {
             security::require_device_token,
         ));
 
+    tokio::task::spawn(handlers::backups::run_scheduled_backups(state.clone()));
+    tokio::task::spawn(handlers::backups::run_live_mirror(state.clone()));
+    tokio::task::spawn(handlers::system_update::run_scheduled_app_update_check(
+        state.clone(),
+    ));
+
     let app = Router::new()
         .merge(public_routes)
         .merge(onboarding_routes)
@@ -167,5 +226,10 @@ async fn main() {
 
     tracing::info!("listening on {bind_addr}");
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }

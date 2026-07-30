@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body class="auth-page">
+    <div class="card">
+        <h1>Set up two-factor login</h1>
+        <p class="subtitle">Scan this with an authenticator app (Google Authenticator, Authy, 1Password, etc.), then enter the 6-digit code it shows.</p>
+
+        {% if let Some(e) = error %}
+        <div class="error">{{ e }}</div>
+        {% endif %}
+
+        <div class="qr-code">
+            <img src="data:image/png;base64,{{ qr_base64 }}" alt="Scan this QR code with your authenticator app" width="220" height="220">
+        </div>
+
+        <p class="hint">Can't scan? Enter this key manually:</p>
+        <div class="secret-key">{{ secret_base32 }}</div>
+
+        <form method="post" action="/auth/setup-2fa">
+            <label for="code">6-digit code</label>
+            <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required autofocus>
+
+            <button type="submit">Verify and enable</button>
+        </form>
+    </div>
+</body>
+</html>

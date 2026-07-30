@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>Security log</h1>
+    </div>
+
+    {% if let Some(s) = success %}
+    <div class="success">{{ s }}</div>
+    {% endif %}
+
+    <div class="card">
+        <h2>Banned IPs</h2>
+        {% if banned_ips.is_empty() %}
+        <p class="empty-state">No IPs are currently banned.</p>
+        {% else %}
+        <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>IP address</th>
+                    <th>Banned until</th>
+                    <th>Reason</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for b in banned_ips %}
+                <tr>
+                    <td>{{ b.ip_address }}</td>
+                    <td>{{ b.banned_until }}</td>
+                    <td>{% if let Some(r) = b.reason %}{{ r }}{% endif %}</td>
+                    <td>
+                        <form method="post" action="/security/unban/{{ b.ip_address }}">
+                            <button type="submit" class="button-small">Unban</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Recent activity</h2>
+        <p class="subtitle">Most recent 200 events. Failed logins, lockouts, IP bans, and successful sign-ins.</p>
+        <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>When</th>
+                    <th>Event</th>
+                    <th>Username</th>
+                    <th>IP address</th>
+                    <th>Detail</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in events %}
+                <tr>
+                    <td>{{ e.created_at }}</td>
+                    <td>{{ e.event_type }}</td>
+                    <td>{% if let Some(u) = e.username %}{{ u }}{% endif %}</td>
+                    <td>{% if let Some(ip) = e.ip_address %}{{ ip }}{% endif %}</td>
+                    <td>{% if let Some(d) = e.detail %}{{ d }}{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+</main>
+</body>
+</html>

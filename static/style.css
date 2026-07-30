@@ -99,6 +99,35 @@ input:focus {
     outline-offset: 1px;
 }
 
+.qr-code {
+    display: flex;
+    justify-content: center;
+    margin: 16px 0;
+}
+
+.qr-code img {
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+}
+
+.hint {
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+    margin-top: -10px;
+    margin-bottom: 16px;
+}
+
+.secret-key {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    word-break: break-all;
+    font-size: 0.9rem;
+    margin-bottom: 16px;
+}
+
 button, .button {
     display: inline-block;
     background: var(--color-primary);
@@ -143,6 +172,94 @@ button:hover, .button:hover {
     padding: 10px 14px;
     margin-bottom: 16px;
     font-size: 0.9rem;
+}
+
+.success {
+    background: #ecfdf5;
+    color: #059669;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    font-size: 0.9rem;
+}
+
+@media (prefers-color-scheme: dark) {
+    .success {
+        background: #0f2a20;
+        color: #34d399;
+    }
+}
+
+.button-small {
+    display: inline-block;
+    background: var(--color-primary);
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.button-small:hover {
+    background: var(--color-primary-hover);
+}
+
+.button-small.button-danger {
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+    border: 1px solid var(--color-danger);
+}
+
+.button-small.button-secondary {
+    background: transparent;
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+}
+
+.admin-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+th {
+    color: var(--color-text-muted);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.table-wrap {
+    overflow-x: auto;
+}
+
+.drive-card {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-top: 8px;
+}
+
+.section-title {
+    margin-top: 28px;
+    margin-bottom: 4px;
 }
 
 .app-header {
