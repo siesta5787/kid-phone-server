@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>Launcher updates</h1>
+    </div>
+
+    {% if let Some(e) = error %}
+    <div class="error">{{ e }}</div>
+    {% endif %}
+
+    <div class="card">
+        <h2>Current version</h2>
+        {% if let Some(release) = current %}
+        <p>Version {{ release.version_name }} (code {{ release.version_code }})</p>
+        <p class="subtitle">Uploaded {{ release.uploaded_at }}</p>
+        {% else %}
+        <p class="subtitle">No release uploaded yet - devices won't be offered an update.</p>
+        {% endif %}
+    </div>
+
+    <form method="post" action="/releases/upload" enctype="multipart/form-data" class="card">
+        <h2>Upload a new build</h2>
+        <label for="version_name">Version name</label>
+        <input type="text" id="version_name" name="version_name" placeholder="e.g. 0.3.0" required>
+
+        <label for="version_code">Version code</label>
+        <input type="text" id="version_code" name="version_code" placeholder="e.g. 58" required>
+
+        <label for="apk">APK file</label>
+        <input type="file" id="apk" name="apk" accept=".apk" required>
+
+        <button type="submit">Upload and make current</button>
+    </form>
+
+    {% if !history.is_empty() %}
+    <div class="card">
+        <h2>History</h2>
+        {% for release in history %}
+        <div class="release-row">
+            <span>{{ release.version_name }} (code {{ release.version_code }}) - {{ release.uploaded_at }}</span>
+            <form method="post" action="/releases/{{ release.id }}/delete" onsubmit="return confirm('Delete this upload?');">
+                <button type="submit" class="button-danger">Delete</button>
+            </form>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</main>
+</body>
+</html>

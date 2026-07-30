@@ -1,11 +1,12 @@
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
 
 use crate::AppState;
 use crate::models::{
-    Device, DevicePolicy, EnrollRequest, EnrollResponse, PolicyResponse, StatusReportRequest,
+    Device, DevicePolicy, EnrollRequest, EnrollResponse, LauncherRelease, LauncherUpdateResponse,
+    PolicyResponse, StatusReportRequest,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -97,14 +98,15 @@ pub async fn status(
 
     sqlx::query(
         "INSERT INTO device_status \
-         (device_id, lock_reason, kiosk_engaged, installed_apps_json, app_version) \
-         VALUES (?, ?, ?, ?, ?)",
+         (device_id, lock_reason, kiosk_engaged, installed_apps_json, app_version, app_version_code) \
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(device.id)
     .bind(&report.lock_reason)
     .bind(report.kiosk_engaged)
     .bind(&installed_apps_json)
     .bind(&report.app_version)
+    .bind(report.app_version_code)
     .execute(&state.db)
     .await
     .ok();
@@ -116,4 +118,50 @@ pub async fn status(
         .ok();
 
     StatusCode::NO_CONTENT
+}
+
+async fn latest_release(state: &AppState) -> Option<LauncherRelease> {
+    sqlx::query_as::<_, LauncherRelease>(
+        "SELECT * FROM launcher_releases ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+}
+
+pub async fn launcher_update(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(_device)): Extension<AuthedDevice>,
+) -> impl IntoResponse {
+    match latest_release(&state).await {
+        Some(release) => Json(LauncherUpdateResponse {
+            version_code: release.version_code,
+            version_name: release.version_name,
+            download_url: "/api/devices/launcher-update/download".to_string(),
+        })
+        .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+pub async fn launcher_update_download(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(_device)): Extension<AuthedDevice>,
+) -> impl IntoResponse {
+    let Some(release) = latest_release(&state).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    match tokio::fs::read(&release.file_path).await {
+        Ok(bytes) => (
+            [(
+                header::CONTENT_TYPE,
+                "application/vnd.android.package-archive",
+            )],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }

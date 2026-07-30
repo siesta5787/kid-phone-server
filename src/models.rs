@@ -41,7 +41,17 @@ pub struct DeviceStatus {
     pub kiosk_engaged: bool,
     pub installed_apps_json: Option<String>,
     pub app_version: Option<String>,
+    pub app_version_code: Option<i64>,
     pub reported_at: String,
+}
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct LauncherRelease {
+    pub id: i64,
+    pub version_code: i64,
+    pub version_name: String,
+    pub file_path: String,
+    pub uploaded_at: String,
 }
 
 /// One entry in a device's self-reported installed-app list, used to build
@@ -86,4 +96,12 @@ pub struct StatusReportRequest {
     pub kiosk_engaged: bool,
     pub installed_apps: Option<Vec<InstalledApp>>,
     pub app_version: Option<String>,
+    pub app_version_code: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct LauncherUpdateResponse {
+    pub version_code: i64,
+    pub version_name: String,
+    pub download_url: String,
 }

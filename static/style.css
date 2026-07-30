@@ -154,6 +154,30 @@ button:hover, .button:hover {
     border-bottom: 1px solid var(--color-border);
 }
 
+.app-nav {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.app-nav a {
+    text-decoration: none;
+    color: var(--color-text-muted);
+    font-size: 0.9rem;
+}
+
+.release-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.release-row:last-child {
+    border-bottom: none;
+}
+
 .app-header .brand {
     font-weight: 700;
     font-size: 1.1rem;
