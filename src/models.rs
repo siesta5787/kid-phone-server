@@ -35,6 +35,10 @@ pub struct DevicePolicy {
     pub bedtime_end_minutes: Option<i64>,
     pub kiosk_desired: bool,
     pub lock_task_features: Option<i64>,
+    pub wifi_mode: String,
+    pub bluetooth_mode: String,
+    pub override_pin_hash: Option<String>,
+    pub override_pin_salt: Option<String>,
 }
 
 #[derive(sqlx::FromRow, Clone)]
@@ -46,6 +50,7 @@ pub struct DeviceStatus {
     pub installed_apps_json: Option<String>,
     pub app_version: Option<String>,
     pub app_version_code: Option<i64>,
+    pub offline_override_used: bool,
     pub reported_at: String,
 }
 
@@ -109,6 +114,11 @@ pub struct PolicyResponse {
     pub bedtime_start_minutes: Option<i64>,
     pub bedtime_end_minutes: Option<i64>,
     pub kiosk_desired: bool,
+    pub lock_task_features: i64,
+    pub wifi_mode: String,
+    pub bluetooth_mode: String,
+    pub override_pin_hash: Option<String>,
+    pub override_pin_salt: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -118,6 +128,8 @@ pub struct StatusReportRequest {
     pub installed_apps: Option<Vec<InstalledApp>>,
     pub app_version: Option<String>,
     pub app_version_code: Option<i64>,
+    #[serde(default)]
+    pub offline_override_used: bool,
 }
 
 #[derive(Serialize)]

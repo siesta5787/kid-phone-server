@@ -40,7 +40,33 @@
         <h2>Kiosk mode</h2>
         <label class="checkbox-row">
             <input type="checkbox" name="kiosk_desired" value="on" {% if kiosk_desired %}checked{% endif %}>
-            Restrict this phone to only the apps allowed below, and lock down notifications/recents/settings
+            Restrict this phone to only the apps allowed below
+        </label>
+
+        <p class="subtitle">While in kiosk mode, these system features stay available (everything else is locked down):</p>
+        <label class="checkbox-row">
+            <input type="checkbox" name="lock_feature_system_info" value="on" {% if lock_feature_system_info %}checked{% endif %}>
+            Status bar info (time, battery, signal)
+        </label>
+        <label class="checkbox-row">
+            <input type="checkbox" name="lock_feature_notifications" value="on" {% if lock_feature_notifications %}checked{% endif %}>
+            Notifications
+        </label>
+        <label class="checkbox-row">
+            <input type="checkbox" name="lock_feature_home" value="on" {% if lock_feature_home %}checked{% endif %}>
+            Home button
+        </label>
+        <label class="checkbox-row">
+            <input type="checkbox" name="lock_feature_overview" value="on" {% if lock_feature_overview %}checked{% endif %}>
+            Recents (multitasking)
+        </label>
+        <label class="checkbox-row">
+            <input type="checkbox" name="lock_feature_global_actions" value="on" {% if lock_feature_global_actions %}checked{% endif %}>
+            Power button menu
+        </label>
+        <label class="checkbox-row">
+            <input type="checkbox" name="lock_feature_keyguard" value="on" {% if lock_feature_keyguard %}checked{% endif %}>
+            Lock screen (a PIN is required to resume the phone)
         </label>
 
         <h2>Allowed apps</h2>
@@ -85,6 +111,39 @@
                 <input type="time" id="bedtime_end" name="bedtime_end" value="{{ bedtime_end }}">
             </div>
         </div>
+
+        <h2>WiFi</h2>
+        <select name="wifi_mode" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text); margin-bottom:16px;">
+            <option value="open" {% if wifi_mode == "open" %}selected{% endif %}>Open - no restriction</option>
+            <option value="restricted" {% if wifi_mode == "restricted" %}selected{% endif %}>Restricted - existing networks only, can't add new ones</option>
+            <option value="disabled" {% if wifi_mode == "disabled" %}selected{% endif %}>Disabled - WiFi turned off</option>
+        </select>
+
+        <h2>Bluetooth</h2>
+        <select name="bluetooth_mode" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text); margin-bottom:16px;">
+            <option value="open" {% if bluetooth_mode == "open" %}selected{% endif %}>Open - no restriction</option>
+            <option value="restricted" {% if bluetooth_mode == "restricted" %}selected{% endif %}>Restricted - existing devices only, can't pair new ones</option>
+            <option value="disabled" {% if bluetooth_mode == "disabled" %}selected{% endif %}>Disabled - Bluetooth turned off</option>
+        </select>
+
+        <h2>Offline override PIN</h2>
+        <p class="subtitle">A failsafe for when the phone can't reach the server at all (e.g. WiFi is disabled above and there's no other connectivity). Entering this PIN directly on the phone temporarily lifts every restriction; it reasserts automatically the moment the phone can sync again.</p>
+        {% if pin_configured %}
+        <p class="subtitle">A PIN is currently set.</p>
+        {% else %}
+        <p class="subtitle">No PIN is set yet.</p>
+        {% endif %}
+        {% if offline_override_used %}
+        <div class="error">The offline override was used since this device's last check-in.</div>
+        {% endif %}
+        <label for="new_pin">{% if pin_configured %}Change PIN{% else %}Set a PIN{% endif %} (6-10 digits, leave blank to keep the current one)</label>
+        <input type="text" id="new_pin" name="new_pin" inputmode="numeric" pattern="[0-9]{6,10}" maxlength="10" autocomplete="off">
+        {% if pin_configured %}
+        <label class="checkbox-row">
+            <input type="checkbox" name="clear_pin" value="on">
+            Remove the PIN instead (no offline override will be possible)
+        </label>
+        {% endif %}
 
         <button type="submit">Save changes</button>
     </form>

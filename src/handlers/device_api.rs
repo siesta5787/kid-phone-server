@@ -65,6 +65,8 @@ pub async fn policy(
             .flatten()
             .unwrap_or(DevicePolicy {
                 device_id: device.id,
+                wifi_mode: "open".to_string(),
+                bluetooth_mode: "open".to_string(),
                 ..Default::default()
             });
 
@@ -82,6 +84,11 @@ pub async fn policy(
         bedtime_start_minutes: policy.bedtime_start_minutes,
         bedtime_end_minutes: policy.bedtime_end_minutes,
         kiosk_desired: policy.kiosk_desired,
+        lock_task_features: policy.lock_task_features.unwrap_or(0),
+        wifi_mode: policy.wifi_mode,
+        bluetooth_mode: policy.bluetooth_mode,
+        override_pin_hash: policy.override_pin_hash,
+        override_pin_salt: policy.override_pin_salt,
     })
     .into_response()
 }
@@ -98,8 +105,8 @@ pub async fn status(
 
     sqlx::query(
         "INSERT INTO device_status \
-         (device_id, lock_reason, kiosk_engaged, installed_apps_json, app_version, app_version_code) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+         (device_id, lock_reason, kiosk_engaged, installed_apps_json, app_version, app_version_code, offline_override_used) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(device.id)
     .bind(&report.lock_reason)
@@ -107,6 +114,7 @@ pub async fn status(
     .bind(&installed_apps_json)
     .bind(&report.app_version)
     .bind(report.app_version_code)
+    .bind(report.offline_override_used)
     .execute(&state.db)
     .await
     .ok();

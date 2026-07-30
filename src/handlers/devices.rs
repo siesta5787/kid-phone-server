@@ -133,6 +133,27 @@ struct AppCheckbox {
     checked: bool,
 }
 
+/// The six parent-facing LockTask features, decoded from/encoded into the
+/// raw `lock_task_features` bitmask Android's `setLockTaskFeatures` expects.
+/// Not exposing `LOCK_TASK_FEATURE_BLOCK_ACTIVITY_START_IN_TASK` (64) - no
+/// clear parent-facing meaning.
+const LOCK_FEATURE_SYSTEM_INFO: i64 = 1;
+const LOCK_FEATURE_NOTIFICATIONS: i64 = 2;
+const LOCK_FEATURE_HOME: i64 = 4;
+const LOCK_FEATURE_OVERVIEW: i64 = 8;
+const LOCK_FEATURE_GLOBAL_ACTIONS: i64 = 16;
+const LOCK_FEATURE_KEYGUARD: i64 = 32;
+
+const VALID_RADIO_MODES: [&str; 3] = ["open", "restricted", "disabled"];
+
+fn normalize_radio_mode(value: &str) -> String {
+    if VALID_RADIO_MODES.contains(&value) {
+        value.to_string()
+    } else {
+        "open".to_string()
+    }
+}
+
 #[derive(Template)]
 #[template(path = "device_detail.html")]
 struct DeviceDetailTemplate {
@@ -146,6 +167,16 @@ struct DeviceDetailTemplate {
     bedtime_start: String,
     bedtime_end: String,
     kiosk_desired: bool,
+    lock_feature_system_info: bool,
+    lock_feature_notifications: bool,
+    lock_feature_home: bool,
+    lock_feature_overview: bool,
+    lock_feature_global_actions: bool,
+    lock_feature_keyguard: bool,
+    wifi_mode: String,
+    bluetooth_mode: String,
+    pin_configured: bool,
+    offline_override_used: bool,
     latest_status: Option<DeviceStatus>,
 }
 
@@ -185,6 +216,8 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             .flatten()
             .unwrap_or(DevicePolicy {
                 device_id: id,
+                wifi_mode: "open".to_string(),
+                bluetooth_mode: "open".to_string(),
                 ..Default::default()
             });
 
@@ -220,6 +253,12 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         })
         .collect();
 
+    let lock_task_features = policy.lock_task_features.unwrap_or(0);
+    let offline_override_used = latest_status
+        .as_ref()
+        .map(|s| s.offline_override_used)
+        .unwrap_or(false);
+
     Html(
         DeviceDetailTemplate {
             title: device.name.clone(),
@@ -230,6 +269,16 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             bedtime_start: minutes_to_time_input(policy.bedtime_start_minutes),
             bedtime_end: minutes_to_time_input(policy.bedtime_end_minutes),
             kiosk_desired: policy.kiosk_desired,
+            lock_feature_system_info: lock_task_features & LOCK_FEATURE_SYSTEM_INFO != 0,
+            lock_feature_notifications: lock_task_features & LOCK_FEATURE_NOTIFICATIONS != 0,
+            lock_feature_home: lock_task_features & LOCK_FEATURE_HOME != 0,
+            lock_feature_overview: lock_task_features & LOCK_FEATURE_OVERVIEW != 0,
+            lock_feature_global_actions: lock_task_features & LOCK_FEATURE_GLOBAL_ACTIONS != 0,
+            lock_feature_keyguard: lock_task_features & LOCK_FEATURE_KEYGUARD != 0,
+            wifi_mode: policy.wifi_mode,
+            bluetooth_mode: policy.bluetooth_mode,
+            pin_configured: policy.override_pin_hash.is_some(),
+            offline_override_used,
             device,
             apps,
             latest_status,
@@ -247,6 +296,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
 pub async fn update_policy(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Extension(CurrentAdmin(admin)): Extension<CurrentAdmin>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     let mut allowed_packages = Vec::new();
@@ -262,10 +312,77 @@ pub async fn update_policy(
 
     let allowlist_json = serde_json::to_string(&allowed_packages).ok();
 
+    let mut lock_task_features: i64 = 0;
+    if fields.contains_key("lock_feature_system_info") {
+        lock_task_features |= LOCK_FEATURE_SYSTEM_INFO;
+    }
+    if fields.contains_key("lock_feature_notifications") {
+        lock_task_features |= LOCK_FEATURE_NOTIFICATIONS;
+    }
+    if fields.contains_key("lock_feature_home") {
+        lock_task_features |= LOCK_FEATURE_HOME;
+    }
+    if fields.contains_key("lock_feature_overview") {
+        lock_task_features |= LOCK_FEATURE_OVERVIEW;
+    }
+    if fields.contains_key("lock_feature_global_actions") {
+        lock_task_features |= LOCK_FEATURE_GLOBAL_ACTIONS;
+    }
+    if fields.contains_key("lock_feature_keyguard") {
+        lock_task_features |= LOCK_FEATURE_KEYGUARD;
+    }
+
+    let wifi_mode = normalize_radio_mode(&field("wifi_mode"));
+    let bluetooth_mode = normalize_radio_mode(&field("bluetooth_mode"));
+
+    // The PIN fields are optional on every save (this form saves everything
+    // together) - leave the stored hash/salt untouched unless the admin
+    // actually typed a new PIN or explicitly asked to clear it, so blank
+    // fields on an unrelated save can't silently wipe an already-configured
+    // PIN.
+    let current = sqlx::query_as::<_, DevicePolicy>("SELECT * FROM device_policy WHERE device_id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    let current_pin = current.as_ref().and_then(|p| p.override_pin_hash.clone());
+    let current_salt = current.as_ref().and_then(|p| p.override_pin_salt.clone());
+
+    let new_pin = field("new_pin");
+    let new_pin = new_pin.trim();
+    let (override_pin_hash, override_pin_salt, pin_event) = if fields.contains_key("clear_pin") {
+        (None, None, Some("override_pin_cleared"))
+    } else if !new_pin.is_empty() {
+        if new_pin.len() >= 6 && new_pin.chars().all(|c| c.is_ascii_digit()) {
+            let (hash, salt) = security::hash_pin(new_pin);
+            (Some(hash), Some(salt), Some("override_pin_changed"))
+        } else {
+            // Invalid PIN typed - ignore it rather than fail the whole save,
+            // keeping whatever was already configured.
+            (current_pin, current_salt, None)
+        }
+    } else {
+        (current_pin, current_salt, None)
+    };
+
+    if let Some(event_type) = pin_event {
+        security::record_security_event(
+            &state.db,
+            event_type,
+            Some(&admin.username),
+            None,
+            Some(&format!("device {id}")),
+        )
+        .await;
+    }
+
     sqlx::query(
         "UPDATE device_policy SET allowlist_json = ?, weekday_start_minutes = ?, \
          weekday_end_minutes = ?, weekend_start_minutes = ?, weekend_end_minutes = ?, \
          bedtime_start_minutes = ?, bedtime_end_minutes = ?, kiosk_desired = ?, \
+         lock_task_features = ?, wifi_mode = ?, bluetooth_mode = ?, \
+         override_pin_hash = ?, override_pin_salt = ?, \
          updated_at = datetime('now') WHERE device_id = ?",
     )
     .bind(&allowlist_json)
@@ -276,6 +393,11 @@ pub async fn update_policy(
     .bind(time_input_to_minutes(&field("bedtime_start")))
     .bind(time_input_to_minutes(&field("bedtime_end")))
     .bind(fields.contains_key("kiosk_desired"))
+    .bind(lock_task_features)
+    .bind(&wifi_mode)
+    .bind(&bluetooth_mode)
+    .bind(&override_pin_hash)
+    .bind(&override_pin_salt)
     .bind(id)
     .execute(&state.db)
     .await

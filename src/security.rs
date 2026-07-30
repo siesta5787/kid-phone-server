@@ -5,6 +5,7 @@ use axum::extract::{Request, State};
 use axum::http::HeaderMap;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
+use pbkdf2::pbkdf2_hmac;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use totp_rs::{Algorithm, Secret, TOTP};
@@ -221,6 +222,28 @@ pub fn totp_for_secret(secret_base32: &str, username: &str) -> TOTP {
         username.to_string(),
     )
     .expect("fixed TOTP parameters should always be valid")
+}
+
+/// Rounds recommended (OWASP, 2023) as a PBKDF2-HMAC-SHA256 minimum.
+const PIN_PBKDF2_ROUNDS: u32 = 210_000;
+const PIN_SALT_LEN: usize = 16;
+const PIN_HASH_LEN: usize = 32;
+
+/// Hashes a device's offline-override PIN with PBKDF2-HMAC-SHA256 and a
+/// fresh random salt, returning `(hash_hex, salt_hex)`. Deliberately not the
+/// Argon2 used for admin passwords: this hash+salt pair gets shipped down to
+/// the device in its policy payload so `LockActivity` can verify a
+/// locally-entered PIN with zero network at all, and PBKDF2 is available on
+/// Android via the built-in `javax.crypto.SecretKeyFactory` with no extra
+/// client dependency, unlike Argon2. Nothing on the server itself ever
+/// verifies a PIN - there's no server-side flow that takes one - so there's
+/// no matching `verify_pin` here, only the client needs that half.
+pub fn hash_pin(pin: &str) -> (String, String) {
+    let mut salt = [0u8; PIN_SALT_LEN];
+    OsRng.fill_bytes(&mut salt);
+    let mut hash = [0u8; PIN_HASH_LEN];
+    pbkdf2_hmac::<Sha256>(pin.as_bytes(), &salt, PIN_PBKDF2_ROUNDS, &mut hash);
+    (hex::encode(hash), hex::encode(salt))
 }
 
 pub fn generate_totp_secret_base32() -> String {
