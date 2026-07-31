@@ -116,7 +116,6 @@
         <select name="wifi_mode" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text); margin-bottom:16px;">
             <option value="open" {% if wifi_mode == "open" %}selected{% endif %}>Open - no restriction</option>
             <option value="restricted" {% if wifi_mode == "restricted" %}selected{% endif %}>Restricted - existing networks only, can't add new ones</option>
-            <option value="disabled" {% if wifi_mode == "disabled" %}selected{% endif %}>Disabled - WiFi turned off</option>
         </select>
 
         <h2>Bluetooth</h2>
