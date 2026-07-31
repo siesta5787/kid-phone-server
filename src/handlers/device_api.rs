@@ -89,6 +89,8 @@ pub async fn policy(
         bluetooth_mode: policy.bluetooth_mode,
         override_pin_hash: policy.override_pin_hash,
         override_pin_salt: policy.override_pin_salt,
+        require_tailscale: policy.require_tailscale,
+        tailscale_exit_node_id: policy.tailscale_exit_node_id,
     })
     .into_response()
 }

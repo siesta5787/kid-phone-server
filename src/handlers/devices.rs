@@ -262,6 +262,8 @@ struct DeviceDetailTemplate {
     bluetooth_mode: String,
     pin_configured: bool,
     offline_override_used: bool,
+    require_tailscale: bool,
+    tailscale_exit_node_id: String,
     latest_status: Option<DeviceStatus>,
 }
 
@@ -364,6 +366,8 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             bluetooth_mode: policy.bluetooth_mode,
             pin_configured: policy.override_pin_hash.is_some(),
             offline_override_used,
+            require_tailscale: policy.require_tailscale,
+            tailscale_exit_node_id: policy.tailscale_exit_node_id.unwrap_or_default(),
             device,
             apps,
             latest_status,
@@ -420,6 +424,17 @@ pub async fn update_policy(
     let wifi_mode = normalize_radio_mode(&field("wifi_mode"));
     let bluetooth_mode = normalize_radio_mode(&field("bluetooth_mode"));
 
+    let require_tailscale = fields.contains_key("require_tailscale");
+    let tailscale_exit_node_id = {
+        let value = field("tailscale_exit_node_id");
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    };
+
     // The PIN fields are optional on every save (this form saves everything
     // together) - leave the stored hash/salt untouched unless the admin
     // actually typed a new PIN or explicitly asked to clear it, so blank
@@ -469,6 +484,7 @@ pub async fn update_policy(
          bedtime_start_minutes = ?, bedtime_end_minutes = ?, kiosk_desired = ?, \
          lock_task_features = ?, wifi_mode = ?, bluetooth_mode = ?, \
          override_pin_hash = ?, override_pin_salt = ?, \
+         require_tailscale = ?, tailscale_exit_node_id = ?, \
          updated_at = datetime('now') WHERE device_id = ?",
     )
     .bind(&allowlist_json)
@@ -484,6 +500,8 @@ pub async fn update_policy(
     .bind(&bluetooth_mode)
     .bind(&override_pin_hash)
     .bind(&override_pin_salt)
+    .bind(require_tailscale)
+    .bind(&tailscale_exit_node_id)
     .bind(id)
     .execute(&state.db)
     .await

@@ -39,6 +39,8 @@ pub struct DevicePolicy {
     pub bluetooth_mode: String,
     pub override_pin_hash: Option<String>,
     pub override_pin_salt: Option<String>,
+    pub require_tailscale: bool,
+    pub tailscale_exit_node_id: Option<String>,
 }
 
 #[derive(sqlx::FromRow, Clone)]
@@ -119,6 +121,8 @@ pub struct PolicyResponse {
     pub bluetooth_mode: String,
     pub override_pin_hash: Option<String>,
     pub override_pin_salt: Option<String>,
+    pub require_tailscale: bool,
+    pub tailscale_exit_node_id: Option<String>,
 }
 
 #[derive(Deserialize)]

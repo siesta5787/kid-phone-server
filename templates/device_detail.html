@@ -134,6 +134,15 @@
             <option value="disabled" {% if bluetooth_mode == "disabled" %}selected{% endif %}>Disabled - Bluetooth turned off</option>
         </select>
 
+        <h2>VPN (Tailscale)</h2>
+        <p class="subtitle">Requires the Tailscale app to be installed and allowlisted on the phone. Enforced via Android's managed-app-restrictions - the kid can't disconnect Tailscale from within its own app once this is on.</p>
+        <label class="checkbox-row">
+            <input type="checkbox" name="require_tailscale" value="on" {% if require_tailscale %}checked{% endif %}>
+            Require Tailscale to stay connected
+        </label>
+        <label for="tailscale_exit_node_id">Exit node ID (optional - leave blank until your exit node is set up)</label>
+        <input type="text" id="tailscale_exit_node_id" name="tailscale_exit_node_id" value="{{ tailscale_exit_node_id }}" autocomplete="off">
+
         <h2>Offline override PIN</h2>
         <p class="subtitle">A failsafe for when the phone can't reach the server at all (e.g. WiFi is disabled above and there's no other connectivity). Entering this PIN directly on the phone temporarily lifts every restriction; it reasserts automatically the moment the phone can sync again.</p>
         {% if pin_configured %}
