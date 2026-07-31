@@ -1,13 +1,34 @@
 <header class="app-header">
     <a href="/" class="brand">Kid Phone</a>
-    <nav class="app-nav">
-        <a href="/releases">Launcher updates</a>
-        <a href="/backups">Backups</a>
-        <a href="/updates">Software updates</a>
-        <a href="/security">Security log</a>
-        <a href="/account">Account</a>
-        <form method="post" action="/logout">
-            <button type="submit" class="button-link">Sign out</button>
-        </form>
-    </nav>
 </header>
+
+<nav class="bottom-nav">
+    <a href="/" class="bottom-nav-item" data-match="^/$">
+        <svg class="bottom-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10a1 1 0 001 1h4v-6h4v6h4a1 1 0 001-1V10"/></svg>
+        <span>Dashboard</span>
+    </a>
+    <a href="/devices" class="bottom-nav-item" data-match="^/devices">
+        <svg class="bottom-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
+        <span>Devices</span>
+    </a>
+    <a href="/apps" class="bottom-nav-item" data-match="^/apps">
+        <svg class="bottom-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span>Apps</span>
+    </a>
+    <a href="/settings" class="bottom-nav-item" data-match="^/(settings|backups|updates|security|account)">
+        <svg class="bottom-nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        <span>Settings</span>
+    </a>
+</nav>
+
+<script>
+(function () {
+    var path = location.pathname;
+    document.querySelectorAll(".bottom-nav-item").forEach(function (el) {
+        var match = el.getAttribute("data-match");
+        if (match && new RegExp(match).test(path)) {
+            el.classList.add("active");
+        }
+    });
+})();
+</script>

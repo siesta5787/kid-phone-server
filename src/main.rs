@@ -82,7 +82,9 @@ async fn main() {
 
     let state = AppState { db };
 
-    // Reachable without any session at all.
+    // Reachable without any session at all. /sw.js lives here too - a
+    // service-worker fetch has no session cookie context the way a page
+    // load does, so it can't sit behind require_full_auth.
     let public_routes = Router::new()
         .route(
             "/login",
@@ -91,7 +93,8 @@ async fn main() {
         .route(
             "/auth/verify-2fa",
             get(handlers::auth::verify_2fa_form).post(handlers::auth::verify_2fa),
-        );
+        )
+        .route("/sw.js", get(handlers::sw::serve_sw));
 
     // Reachable with a valid session, even mid-onboarding (forced password
     // change / mandatory 2FA setup) - these routes ARE the onboarding gate,
@@ -109,7 +112,8 @@ async fn main() {
         .layer(from_fn_with_state(state.clone(), security::require_session));
 
     let admin_routes = Router::new()
-        .route("/", get(handlers::devices::list_devices))
+        .route("/", get(handlers::devices::dashboard))
+        .route("/devices", get(handlers::devices::list_devices))
         .route(
             "/devices/new",
             get(handlers::devices::new_device_form).post(handlers::devices::create_device),
@@ -127,16 +131,18 @@ async fn main() {
             "/devices/{id}/delete",
             post(handlers::devices::delete_device),
         )
-        .route("/releases", get(handlers::releases::list_releases))
+        .route("/apps", get(handlers::releases::list_apps))
+        .route("/apps/launcher", get(handlers::releases::list_releases))
         .route(
-            "/releases/upload",
+            "/apps/launcher/upload",
             post(handlers::releases::upload_release)
                 .layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
         )
         .route(
-            "/releases/{id}/delete",
+            "/apps/launcher/{id}/delete",
             post(handlers::releases::delete_release),
         )
+        .route("/settings", get(handlers::settings::settings_hub))
         .route("/backups", get(handlers::backups::list_backups))
         .route("/backups/create", post(handlers::backups::create_backup))
         .route(

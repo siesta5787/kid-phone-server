@@ -94,6 +94,10 @@
                 <label for="weekday_end">until</label>
                 <input type="time" id="weekday_end" name="weekday_end" value="{{ weekday_end }}">
             </div>
+        </div>
+        <button type="button" class="button-small button-secondary" onclick="document.getElementById('weekday_start').value='';document.getElementById('weekday_end').value='';">Clear weekday schedule</button>
+
+        <div class="schedule-grid" style="margin-top:16px;">
             <div>
                 <label for="weekend_start">Weekend allowed from</label>
                 <input type="time" id="weekend_start" name="weekend_start" value="{{ weekend_start }}">
@@ -102,6 +106,10 @@
                 <label for="weekend_end">until</label>
                 <input type="time" id="weekend_end" name="weekend_end" value="{{ weekend_end }}">
             </div>
+        </div>
+        <button type="button" class="button-small button-secondary" onclick="document.getElementById('weekend_start').value='';document.getElementById('weekend_end').value='';">Clear weekend schedule</button>
+
+        <div class="schedule-grid" style="margin-top:16px;">
             <div>
                 <label for="bedtime_start">Bedtime lock from</label>
                 <input type="time" id="bedtime_start" name="bedtime_start" value="{{ bedtime_start }}">
@@ -111,6 +119,7 @@
                 <input type="time" id="bedtime_end" name="bedtime_end" value="{{ bedtime_end }}">
             </div>
         </div>
+        <button type="button" class="button-small button-secondary" onclick="document.getElementById('bedtime_start').value='';document.getElementById('bedtime_end').value='';">Clear bedtime schedule</button>
 
         <h2>WiFi</h2>
         <select name="wifi_mode" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text); margin-bottom:16px;">

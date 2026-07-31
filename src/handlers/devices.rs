@@ -27,6 +27,91 @@ struct DevicesListTemplate {
     devices: Vec<DeviceListRow>,
 }
 
+struct DashboardDeviceRow {
+    id: i64,
+    name: String,
+    status_text: String,
+    lock_reason: Option<String>,
+    kiosk_engaged: bool,
+    offline_override_used: bool,
+}
+
+#[derive(Template)]
+#[template(path = "dashboard.html")]
+struct DashboardTemplate {
+    title: String,
+    device_count: usize,
+    devices: Vec<DashboardDeviceRow>,
+    any_override_used: bool,
+}
+
+/// Landing page - a quick at-a-glance summary, distinct from the full
+/// management list at `/devices`. Small enough (a handful of devices,
+/// realistically) that a query per device is simpler than one clever join,
+/// matching this app's existing style (`view_device` already does the same
+/// thing for a single device).
+pub async fn dashboard(State(state): State<AppState>) -> impl IntoResponse {
+    let devices = sqlx::query_as::<_, Device>("SELECT * FROM devices ORDER BY name")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+    let device_count = devices.len();
+    let mut rows = Vec::with_capacity(device_count);
+    let mut any_override_used = false;
+
+    for d in devices {
+        let latest_status = sqlx::query_as::<_, DeviceStatus>(
+            "SELECT * FROM device_status WHERE device_id = ? ORDER BY reported_at DESC LIMIT 1",
+        )
+        .bind(d.id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+        let status_text = if d.enrolled_at.is_none() {
+            "Not enrolled yet".to_string()
+        } else {
+            match &d.last_seen_at {
+                Some(t) => format!("Last seen {t}"),
+                None => "Enrolled, not seen yet".to_string(),
+            }
+        };
+
+        let offline_override_used = latest_status
+            .as_ref()
+            .map(|s| s.offline_override_used)
+            .unwrap_or(false);
+        if offline_override_used {
+            any_override_used = true;
+        }
+
+        rows.push(DashboardDeviceRow {
+            id: d.id,
+            name: d.name,
+            status_text,
+            lock_reason: latest_status.as_ref().map(|s| s.lock_reason.clone()),
+            kiosk_engaged: latest_status
+                .as_ref()
+                .map(|s| s.kiosk_engaged)
+                .unwrap_or(false),
+            offline_override_used,
+        });
+    }
+
+    Html(
+        DashboardTemplate {
+            title: "Dashboard".to_string(),
+            device_count,
+            devices: rows,
+            any_override_used,
+        }
+        .render()
+        .unwrap(),
+    )
+}
+
 pub async fn list_devices(State(state): State<AppState>) -> impl IntoResponse {
     let devices = sqlx::query_as::<_, Device>("SELECT * FROM devices ORDER BY name")
         .fetch_all(&state.db)

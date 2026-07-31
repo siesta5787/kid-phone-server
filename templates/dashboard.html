@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>Dashboard</h1>
+    </div>
+
+    {% if any_override_used %}
+    <div class="error">One or more devices used their offline override PIN since your last check-in - see Devices for details.</div>
+    {% endif %}
+
+    <div class="stat-tiles">
+        <div class="stat-tile">
+            <div class="stat-label">Devices</div>
+            <div class="stat-value">{{ device_count }}</div>
+        </div>
+    </div>
+
+    <div class="page-header">
+        <h2>Devices</h2>
+        <a href="/devices/new" class="button-small">Add a device</a>
+    </div>
+
+    {% if devices.is_empty() %}
+    <p class="empty-state">No devices yet. Add one to get started.</p>
+    {% else %}
+    <div class="device-list">
+        {% for d in devices %}
+        <a class="device-card" href="/devices/{{ d.id }}">
+            <span>
+                <span class="device-name">{{ d.name }}</span><br>
+                <span class="device-status">{{ d.status_text }}</span>
+            </span>
+            <span class="device-status">
+                {% if let Some(reason) = d.lock_reason %}
+                    {% if reason != "NONE" %}{{ reason }}{% else %}Unlocked{% endif %}
+                {% endif %}
+                {% if d.kiosk_engaged %} &middot; Kiosk{% endif %}
+                {% if d.offline_override_used %} &middot; Override used{% endif %}
+            </span>
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
+</main>
+</body>
+</html>

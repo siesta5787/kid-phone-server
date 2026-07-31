@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>Settings</h1>
+    </div>
+
+    <div class="icon-list">
+        <a href="/backups" class="icon-list-item">
+            <span class="icon-list-icon" style="background:#16a34a;">&#128190;</span>
+            <span class="icon-list-text">
+                <strong>Backups</strong>
+                <span>Create, schedule, upload, and restore backups</span>
+            </span>
+        </a>
+        <a href="/updates" class="icon-list-item">
+            <span class="icon-list-icon" style="background:#7c3aed;">&#128260;</span>
+            <span class="icon-list-text">
+                <strong>Software updates</strong>
+                <span>App version, Raspberry Pi OS, and Tailscale</span>
+            </span>
+        </a>
+        <a href="/security" class="icon-list-item">
+            <span class="icon-list-icon" style="background:#dc2626;">&#128274;</span>
+            <span class="icon-list-text">
+                <strong>Security</strong>
+                <span>Login activity, lockouts, and banned IPs</span>
+            </span>
+        </a>
+        <a href="/account" class="icon-list-item">
+            <span class="icon-list-icon" style="background:#2563eb;">&#128100;</span>
+            <span class="icon-list-text">
+                <strong>Account</strong>
+                <span>Change password, two-factor login</span>
+            </span>
+        </a>
+    </div>
+
+    <form method="post" action="/logout" style="margin-top:24px;">
+        <button type="submit" class="button-secondary">Sign out</button>
+    </form>
+</main>
+</body>
+</html>

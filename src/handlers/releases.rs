@@ -9,6 +9,36 @@ use crate::security::generate_device_token;
 const RELEASES_DIR: &str = "data/launcher_releases";
 
 #[derive(Template)]
+#[template(path = "apps_list.html")]
+struct AppsListTemplate {
+    title: String,
+    current: Option<LauncherRelease>,
+}
+
+/// The Apps tab - a list of installable apps, one card each. Only "Kids
+/// Launcher" exists today, but this is deliberately a list+detail structure
+/// (mirroring how Devices already works) so a second app has somewhere to
+/// go later without another restructuring.
+pub async fn list_apps(State(state): State<AppState>) -> impl IntoResponse {
+    let current = sqlx::query_as::<_, LauncherRelease>(
+        "SELECT * FROM launcher_releases ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    Html(
+        AppsListTemplate {
+            title: "Apps".to_string(),
+            current,
+        }
+        .render()
+        .unwrap(),
+    )
+}
+
+#[derive(Template)]
 #[template(path = "releases.html")]
 struct ReleasesTemplate {
     title: String,
@@ -34,7 +64,7 @@ async fn render(state: &AppState, error: Option<String>) -> axum::response::Resp
 
     Html(
         ReleasesTemplate {
-            title: "Launcher updates".to_string(),
+            title: "Kids Launcher".to_string(),
             current,
             history,
             error,
@@ -115,7 +145,7 @@ pub async fn upload_release(
     .await
     .ok();
 
-    Redirect::to("/releases").into_response()
+    Redirect::to("/apps/launcher").into_response()
 }
 
 pub async fn delete_release(
@@ -137,5 +167,5 @@ pub async fn delete_release(
         .await
         .ok();
 
-    Redirect::to("/releases")
+    Redirect::to("/apps/launcher")
 }

@@ -7,7 +7,7 @@
 {% include "partials/app_header.html" %}
 <main class="container">
     <div class="page-header">
-        <h1>Launcher updates</h1>
+        <h1>Kids Launcher</h1>
     </div>
 
     {% if let Some(e) = error %}
@@ -24,7 +24,7 @@
         {% endif %}
     </div>
 
-    <form method="post" action="/releases/upload" enctype="multipart/form-data" class="card">
+    <form method="post" action="/apps/launcher/upload" enctype="multipart/form-data" class="card">
         <h2>Upload a new build</h2>
         <label for="version_name">Version name</label>
         <input type="text" id="version_name" name="version_name" placeholder="e.g. 0.3.0" required>
@@ -46,7 +46,7 @@
             <span>{{ release.version_name }} (code {{ release.version_code }}) - {{ release.uploaded_at }}</span>
             <details style="display:inline-block;">
                 <summary class="button-danger" style="display:inline-block; cursor:pointer; list-style:none;">Delete&hellip;</summary>
-                <form method="post" action="/releases/{{ release.id }}/delete" style="margin-top:8px;">
+                <form method="post" action="/apps/launcher/{{ release.id }}/delete" style="margin-top:8px;">
                     <button type="submit" class="button-danger">Yes, delete this upload</button>
                 </form>
             </details>
