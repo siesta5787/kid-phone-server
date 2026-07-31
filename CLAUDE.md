@@ -2,9 +2,9 @@
 
 ## What this is
 
-A lightweight, purpose-built parental-control server for the Kid Phone project, replacing Headwind MDM + a custom `kidmode-plugin` (Java/Tomcat/Postgres/AngularJS). The old stack proved the underlying Device-Owner Android approach works, but its admin side was never actually usable by a non-technical parent — every policy change needed a raw `psql` insert. This rewrite exists to give a parent a genuinely simple web UI for managing their kids' phones, while staying lightweight enough to run on a Raspberry Pi Zero 2 W.
+A lightweight, purpose-built parental-control server for the Kid Phone project. It's the sole backend for the client - there is no other MDM server or protocol involved. An earlier prototype used a different MDM stack entirely; that's been fully replaced, not extended, and none of its code, protocol, or data model carried over.
 
-The client is a separate repo: `kids-launcher-mdm` (a custom Kotlin Android launcher that's also the Device-Owner MDM agent, package `com.kidslauncher.mdm`, networking code in `headwind/`). As of this server's initial build, the client still speaks the *old* Headwind-style protocol - a follow-up session/plan is needed to rewrite the client's `headwind/` package to speak this server's API instead. Don't assume the client already matches this contract.
+The client is a separate repo: `kids-launcher-mdm` (a custom Kotlin Android launcher that's also the Device-Owner MDM agent, package `com.kidslauncher.mdm`, networking code in `server/`). It speaks this server's API directly - enrollment, policy fetch, and status reporting are all this repo's own device-facing routes under `/api/devices/*`.
 
 ## Tech stack
 
@@ -47,7 +47,7 @@ No prior programming experience - build features directly rather than explaining
 ## Current status / what's built
 
 - **Phase 0-3 complete and verified end-to-end** (browser-tested UI + curl-tested API, 2026-07-30): admin login with forced first-password-change, device list, add-device (enrollment code generation + regeneration), full enroll → policy fetch → status report loop, per-device page with real allowlist checkboxes populated from device-reported apps, schedule time-picker round-trip, kiosk toggle persisting to `kiosk_desired`.
-- **Client rewrite also done and verified live** (same date): kids-launcher-mdm's `headwind/` package was renamed to `server/` and rewritten to speak this API - see that repo's own notes. The physical test phone is enrolled against this server for real (not just curl-simulated).
+- **Client is fully wired up and verified live**: kids-launcher-mdm's `server/` package speaks this API directly - see that repo's own notes. The physical test phone is enrolled against this server for real (not just curl-simulated).
 - **Sync interval is 2 minutes**, not the 15-minute WorkManager periodic floor - the client self-chains one-time work requests instead of using `PeriodicWorkRequest`, specifically because 15 minutes was too slow for a parent to see a change take effect. See kids-launcher-mdm's `MdmSyncWorker.kt`.
 - **Not yet built**: Phase 4 (actual deploy to the physical Pi Zero 2 W / DietPi - `deploy/install.sh` etc. are written but untested against real hardware).
 - **Backlog (explicitly deferred, not scope-creep)**:

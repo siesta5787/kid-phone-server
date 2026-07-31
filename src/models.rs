@@ -90,7 +90,7 @@ pub struct InstalledApp {
 }
 
 // ---------------------------------------------------------------------
-// Device-facing API wire types (plain JSON, no Headwind-style envelope)
+// Device-facing API wire types (plain JSON, no wrapper envelope)
 // ---------------------------------------------------------------------
 
 #[derive(Deserialize)]
