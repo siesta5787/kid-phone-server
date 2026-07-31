@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container container-narrow">
+    <h1>Add an app</h1>
+    <p class="subtitle">Watches a GitHub repo's Releases for a new APK and pushes it to devices automatically, the same way the launcher updates itself.</p>
+    <form method="post" action="/apps/tracked/new">
+        <label for="name">Name</label>
+        <input type="text" id="name" name="name" placeholder="e.g. Tailscale" required autofocus>
+
+        <label for="package_name">Android package name</label>
+        <input type="text" id="package_name" name="package_name" placeholder="e.g. com.tailscale.ipn" required>
+
+        <label for="github_repo">GitHub repo</label>
+        <input type="text" id="github_repo" name="github_repo" placeholder="e.g. tailscale/tailscale-android" required>
+
+        <label for="asset_pattern">Asset filename filter (optional)</label>
+        <input type="text" id="asset_pattern" name="asset_pattern" placeholder="Leave blank to use the first .apk found">
+        <p class="hint">Only needed if a release has more than one APK (e.g. per architecture) - the first asset whose filename contains this text is used.</p>
+
+        <button type="submit">Add app</button>
+    </form>
+</main>
+</body>
+</html>

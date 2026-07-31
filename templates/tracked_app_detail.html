@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>{{ app.name }}</h1>
+    </div>
+
+    {% if let Some(e) = error %}
+    <div class="error">Check failed: {{ e }}</div>
+    {% endif %}
+
+    <div class="card">
+        <h2>Status</h2>
+        <p>Package: <strong>{{ app.package_name }}</strong></p>
+        <p>Source: <a href="https://github.com/{{ app.github_repo }}">{{ app.github_repo }}</a></p>
+        {% if let Some(tag) = app.latest_release_tag %}
+        <p>Current synced release: <strong>{{ tag }}</strong></p>
+        {% else %}
+        <p class="subtitle">No release synced yet.</p>
+        {% endif %}
+        {% if let Some(checked) = app.last_checked_at %}
+        <p class="subtitle">Last checked {{ checked }}</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <form method="post" action="/apps/tracked/{{ app.id }}/check">
+            <button type="submit">Check now</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <form method="post" action="/apps/tracked/{{ app.id }}/enabled">
+            <label class="checkbox-row">
+                <input type="checkbox" name="enabled" value="on" {% if app.enabled %}checked{% endif %} onchange="this.form.submit()">
+                Enabled - checked automatically every hour
+            </label>
+        </form>
+    </div>
+
+    <div class="card">
+        <details>
+            <summary class="button-danger" style="display:inline-block; cursor:pointer; list-style:none;">Remove this app&hellip;</summary>
+            <form method="post" action="/apps/tracked/{{ app.id }}/delete" style="margin-top:12px;">
+                <div class="error">This stops tracking {{ app.name }} and deletes its cached APK. Devices already running it are unaffected.</div>
+                <button type="submit" class="button-danger">Yes, remove {{ app.name }}</button>
+            </form>
+        </details>
+    </div>
+</main>
+</body>
+</html>

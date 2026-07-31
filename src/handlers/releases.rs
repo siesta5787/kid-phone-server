@@ -3,7 +3,7 @@ use axum::extract::{Multipart, Path, State};
 use axum::response::{Html, IntoResponse, Redirect};
 
 use crate::AppState;
-use crate::models::LauncherRelease;
+use crate::models::{LauncherRelease, TrackedApp};
 use crate::security::generate_device_token;
 
 const RELEASES_DIR: &str = "data/launcher_releases";
@@ -13,12 +13,12 @@ const RELEASES_DIR: &str = "data/launcher_releases";
 struct AppsListTemplate {
     title: String,
     current: Option<LauncherRelease>,
+    tracked: Vec<TrackedApp>,
 }
 
-/// The Apps tab - a list of installable apps, one card each. Only "Kids
-/// Launcher" exists today, but this is deliberately a list+detail structure
-/// (mirroring how Devices already works) so a second app has somewhere to
-/// go later without another restructuring.
+/// The Apps tab - a list of installable apps, one card each: "Kids Launcher"
+/// (built-in, manually uploaded) plus every app tracked from a GitHub repo's
+/// Releases (see `handlers::tracked_apps`).
 pub async fn list_apps(State(state): State<AppState>) -> impl IntoResponse {
     let current = sqlx::query_as::<_, LauncherRelease>(
         "SELECT * FROM launcher_releases ORDER BY id DESC LIMIT 1",
@@ -28,10 +28,16 @@ pub async fn list_apps(State(state): State<AppState>) -> impl IntoResponse {
     .ok()
     .flatten();
 
+    let tracked = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps ORDER BY name")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
     Html(
         AppsListTemplate {
             title: "Apps".to_string(),
             current,
+            tracked,
         }
         .render()
         .unwrap(),

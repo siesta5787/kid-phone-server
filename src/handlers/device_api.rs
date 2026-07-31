@@ -1,4 +1,4 @@
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
@@ -6,7 +6,7 @@ use axum::{Extension, Json};
 use crate::AppState;
 use crate::models::{
     Device, DevicePolicy, EnrollRequest, EnrollResponse, LauncherRelease, LauncherUpdateResponse,
-    PolicyResponse, StatusReportRequest,
+    PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -162,6 +162,64 @@ pub async fn launcher_update_download(
     };
 
     match tokio::fs::read(&release.file_path).await {
+        Ok(bytes) => (
+            [(
+                header::CONTENT_TYPE,
+                "application/vnd.android.package-archive",
+            )],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+/// Every enabled tracked app that has a synced release - the generalized,
+/// multi-app counterpart to `launcher_update` above. `download_url` is
+/// computed per-row rather than a fixed string, since there's one download
+/// endpoint per app id.
+pub async fn tracked_app_updates(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(_device)): Extension<AuthedDevice>,
+) -> impl IntoResponse {
+    let apps = sqlx::query_as::<_, TrackedApp>(
+        "SELECT * FROM tracked_apps WHERE enabled = 1 AND latest_release_tag IS NOT NULL",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let updates: Vec<TrackedAppUpdate> = apps
+        .into_iter()
+        .filter_map(|app| {
+            Some(TrackedAppUpdate {
+                package_name: app.package_name,
+                release_tag: app.latest_release_tag?,
+                download_url: format!("/api/devices/apps/{}/download", app.id),
+            })
+        })
+        .collect();
+
+    Json(updates).into_response()
+}
+
+pub async fn tracked_app_download(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Extension(AuthedDevice(_device)): Extension<AuthedDevice>,
+) -> impl IntoResponse {
+    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+    let Some(file_path) = app.and_then(|a| a.latest_release_file_path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    match tokio::fs::read(&file_path).await {
         Ok(bytes) => (
             [(
                 header::CONTENT_TYPE,

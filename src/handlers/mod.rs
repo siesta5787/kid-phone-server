@@ -8,4 +8,5 @@ pub mod settings;
 pub mod sw;
 pub mod system_maintenance;
 pub mod system_update;
+pub mod tracked_apps;
 pub mod updates;

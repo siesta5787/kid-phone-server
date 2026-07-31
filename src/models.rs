@@ -82,6 +82,20 @@ pub struct LauncherRelease {
     pub uploaded_at: String,
 }
 
+#[derive(sqlx::FromRow, Clone)]
+pub struct TrackedApp {
+    pub id: i64,
+    pub name: String,
+    pub package_name: String,
+    pub github_repo: String,
+    pub asset_pattern: Option<String>,
+    pub enabled: bool,
+    pub latest_release_tag: Option<String>,
+    pub latest_release_file_path: Option<String>,
+    pub last_checked_at: Option<String>,
+    pub created_at: String,
+}
+
 /// One entry in a device's self-reported installed-app list, used to build
 /// the admin UI's allowlist checkboxes from real data instead of asking a
 /// parent to type raw Android package names.
@@ -140,5 +154,12 @@ pub struct StatusReportRequest {
 pub struct LauncherUpdateResponse {
     pub version_code: i64,
     pub version_name: String,
+    pub download_url: String,
+}
+
+#[derive(Serialize)]
+pub struct TrackedAppUpdate {
+    pub package_name: String,
+    pub release_tag: String,
     pub download_url: String,
 }

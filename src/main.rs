@@ -142,6 +142,27 @@ async fn main() {
             "/apps/launcher/{id}/delete",
             post(handlers::releases::delete_release),
         )
+        .route(
+            "/apps/tracked/new",
+            get(handlers::tracked_apps::new_tracked_app_form)
+                .post(handlers::tracked_apps::create_tracked_app),
+        )
+        .route(
+            "/apps/tracked/{id}",
+            get(handlers::tracked_apps::view_tracked_app),
+        )
+        .route(
+            "/apps/tracked/{id}/check",
+            post(handlers::tracked_apps::check_now),
+        )
+        .route(
+            "/apps/tracked/{id}/enabled",
+            post(handlers::tracked_apps::set_enabled),
+        )
+        .route(
+            "/apps/tracked/{id}/delete",
+            post(handlers::tracked_apps::delete_tracked_app),
+        )
         .route("/settings", get(handlers::settings::settings_hub))
         .route("/backups", get(handlers::backups::list_backups))
         .route("/backups/create", post(handlers::backups::create_backup))
@@ -232,6 +253,14 @@ async fn main() {
             "/api/devices/launcher-update/download",
             get(handlers::device_api::launcher_update_download),
         )
+        .route(
+            "/api/devices/apps",
+            get(handlers::device_api::tracked_app_updates),
+        )
+        .route(
+            "/api/devices/apps/{id}/download",
+            get(handlers::device_api::tracked_app_download),
+        )
         .layer(from_fn_with_state(
             state.clone(),
             security::require_device_token,
@@ -240,6 +269,9 @@ async fn main() {
     tokio::task::spawn(handlers::backups::run_scheduled_backups(state.clone()));
     tokio::task::spawn(handlers::backups::run_live_mirror(state.clone()));
     tokio::task::spawn(handlers::system_update::run_scheduled_app_update_check(
+        state.clone(),
+    ));
+    tokio::task::spawn(handlers::tracked_apps::run_scheduled_tracked_app_sync(
         state.clone(),
     ));
 
