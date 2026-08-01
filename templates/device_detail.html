@@ -122,8 +122,23 @@
             <option value="disabled" {% if bluetooth_mode == "disabled" %}selected{% endif %}>Disabled - Bluetooth turned off</option>
         </select>
 
+        <h2>Quick Controls (swipe-left screen)</h2>
+        <p class="subtitle">These appear on a screen the kid can reach by swiping left from the home screen. This is the intended way for a kid to reach these controls instead of Android's own Quick Settings shade, which can't be fully locked down - a third-party app can publish its own tile there (Tailscale does) that bypasses restrictions below.</p>
+        <label class="checkbox-row">
+            <input type="checkbox" name="quick_control_wifi" value="on" {% if quick_control_wifi %}checked{% endif %}>
+            WiFi on/off
+        </label>
+        <label class="checkbox-row">
+            <input type="checkbox" name="quick_control_bluetooth" value="on" {% if quick_control_bluetooth %}checked{% endif %}>
+            Bluetooth on/off
+        </label>
+        <label class="checkbox-row">
+            <input type="checkbox" name="quick_control_brightness" value="on" {% if quick_control_brightness %}checked{% endif %}>
+            Screen brightness
+        </label>
+
         <h2>VPN (Tailscale)</h2>
-        <p class="subtitle">Requires the Tailscale app to be installed and allowlisted on the phone. Enforced via Android's managed-app-restrictions - the kid can't disconnect Tailscale from within its own app once this is on.</p>
+        <p class="subtitle">Requires the Tailscale app to be installed and allowlisted on the phone. Enforced both at the app level (the kid can't disconnect Tailscale from within its own app once this is on) and at the OS level (Android's always-on VPN lockdown) - together these cover Tailscale's own Quick Settings tile too, which the app-level restriction alone doesn't reach.</p>
         <label class="checkbox-row">
             <input type="checkbox" name="require_tailscale" value="on" {% if require_tailscale %}checked{% endif %}>
             Require Tailscale to stay connected

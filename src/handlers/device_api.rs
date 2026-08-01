@@ -91,6 +91,7 @@ pub async fn policy(
         override_pin_salt: policy.override_pin_salt,
         require_tailscale: policy.require_tailscale,
         tailscale_exit_node_id: policy.tailscale_exit_node_id,
+        quick_controls_mask: policy.quick_controls_mask,
     })
     .into_response()
 }

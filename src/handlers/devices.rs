@@ -229,6 +229,14 @@ const LOCK_FEATURE_OVERVIEW: i64 = 8;
 const LOCK_FEATURE_GLOBAL_ACTIONS: i64 = 16;
 const LOCK_FEATURE_KEYGUARD: i64 = 32;
 
+/// Bits for `quick_controls_mask` - which switches show up on the launcher's
+/// swipe-left-from-home "Quick Controls" screen (see kids-launcher-mdm's
+/// `ui/quickcontrols/QuickControlsActivity`), the kid-facing replacement for
+/// Android's native Quick Settings shade.
+const QUICK_CONTROL_WIFI: i64 = 1;
+const QUICK_CONTROL_BLUETOOTH: i64 = 2;
+const QUICK_CONTROL_BRIGHTNESS: i64 = 4;
+
 const VALID_RADIO_MODES: [&str; 3] = ["open", "restricted", "disabled"];
 
 fn normalize_radio_mode(value: &str) -> String {
@@ -261,6 +269,9 @@ struct DeviceDetailTemplate {
     offline_override_used: bool,
     require_tailscale: bool,
     tailscale_exit_node_id: String,
+    quick_control_wifi: bool,
+    quick_control_bluetooth: bool,
+    quick_control_brightness: bool,
     latest_status: Option<DeviceStatus>,
 }
 
@@ -362,6 +373,9 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             offline_override_used,
             require_tailscale: policy.require_tailscale,
             tailscale_exit_node_id: policy.tailscale_exit_node_id.unwrap_or_default(),
+            quick_control_wifi: policy.quick_controls_mask & QUICK_CONTROL_WIFI != 0,
+            quick_control_bluetooth: policy.quick_controls_mask & QUICK_CONTROL_BLUETOOTH != 0,
+            quick_control_brightness: policy.quick_controls_mask & QUICK_CONTROL_BRIGHTNESS != 0,
             device,
             apps,
             latest_status,
@@ -413,6 +427,17 @@ pub async fn update_policy(
 
     let wifi_mode = normalize_radio_mode(&field("wifi_mode"));
     let bluetooth_mode = normalize_radio_mode(&field("bluetooth_mode"));
+
+    let mut quick_controls_mask: i64 = 0;
+    if fields.contains_key("quick_control_wifi") {
+        quick_controls_mask |= QUICK_CONTROL_WIFI;
+    }
+    if fields.contains_key("quick_control_bluetooth") {
+        quick_controls_mask |= QUICK_CONTROL_BLUETOOTH;
+    }
+    if fields.contains_key("quick_control_brightness") {
+        quick_controls_mask |= QUICK_CONTROL_BRIGHTNESS;
+    }
 
     let require_tailscale = fields.contains_key("require_tailscale");
     let tailscale_exit_node_id = {
@@ -475,6 +500,7 @@ pub async fn update_policy(
          lock_task_features = ?, wifi_mode = ?, bluetooth_mode = ?, \
          override_pin_hash = ?, override_pin_salt = ?, \
          require_tailscale = ?, tailscale_exit_node_id = ?, \
+         quick_controls_mask = ?, \
          updated_at = datetime('now') WHERE device_id = ?",
     )
     .bind(&allowlist_json)
@@ -492,6 +518,7 @@ pub async fn update_policy(
     .bind(&override_pin_salt)
     .bind(require_tailscale)
     .bind(&tailscale_exit_node_id)
+    .bind(quick_controls_mask)
     .bind(id)
     .execute(&state.db)
     .await

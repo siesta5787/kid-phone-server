@@ -41,6 +41,7 @@ pub struct DevicePolicy {
     pub override_pin_salt: Option<String>,
     pub require_tailscale: bool,
     pub tailscale_exit_node_id: Option<String>,
+    pub quick_controls_mask: i64,
 }
 
 #[derive(sqlx::FromRow, Clone)]
@@ -137,6 +138,7 @@ pub struct PolicyResponse {
     pub override_pin_salt: Option<String>,
     pub require_tailscale: bool,
     pub tailscale_exit_node_id: Option<String>,
+    pub quick_controls_mask: i64,
 }
 
 #[derive(Deserialize)]
