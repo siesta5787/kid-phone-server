@@ -222,7 +222,7 @@ pub fn totp_for_secret(secret_base32: &str, username: &str) -> TOTP {
         secret
             .to_bytes()
             .expect("stored secret should be valid base32"),
-        Some("Kid Phone".to_string()),
+        Some("Kids Device MDM".to_string()),
         username.to_string(),
     )
     .expect("fixed TOTP parameters should always be valid")

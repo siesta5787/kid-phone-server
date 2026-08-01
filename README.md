@@ -1,4 +1,4 @@
-# Kid Phone Server
+# Kids Device MDM
 
 A self-hosted parental-control admin server for Android phones running in [Device Owner mode](https://developer.android.com/work/dpc/build-dpc). Built to pair with [`kids-launcher-mdm`](https://github.com/siesta5787/kids-launcher-mdm), a custom Android launcher that doubles as the on-device management agent - this repo is the parent-facing web app that controls it.
 

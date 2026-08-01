@@ -252,10 +252,7 @@ struct DeviceDetailTemplate {
     bedtime_start: String,
     bedtime_end: String,
     kiosk_desired: bool,
-    lock_feature_system_info: bool,
     lock_feature_notifications: bool,
-    lock_feature_home: bool,
-    lock_feature_overview: bool,
     lock_feature_global_actions: bool,
     lock_feature_keyguard: bool,
     wifi_mode: String,
@@ -356,10 +353,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             bedtime_start: minutes_to_time_input(policy.bedtime_start_minutes),
             bedtime_end: minutes_to_time_input(policy.bedtime_end_minutes),
             kiosk_desired: policy.kiosk_desired,
-            lock_feature_system_info: lock_task_features & LOCK_FEATURE_SYSTEM_INFO != 0,
             lock_feature_notifications: lock_task_features & LOCK_FEATURE_NOTIFICATIONS != 0,
-            lock_feature_home: lock_task_features & LOCK_FEATURE_HOME != 0,
-            lock_feature_overview: lock_task_features & LOCK_FEATURE_OVERVIEW != 0,
             lock_feature_global_actions: lock_task_features & LOCK_FEATURE_GLOBAL_ACTIONS != 0,
             lock_feature_keyguard: lock_task_features & LOCK_FEATURE_KEYGUARD != 0,
             wifi_mode: policy.wifi_mode,
@@ -401,18 +395,14 @@ pub async fn update_policy(
 
     let allowlist_json = serde_json::to_string(&allowed_packages).ok();
 
-    let mut lock_task_features: i64 = 0;
-    if fields.contains_key("lock_feature_system_info") {
-        lock_task_features |= LOCK_FEATURE_SYSTEM_INFO;
-    }
+    // Home, status bar info, and recents don't let a kid reach anything outside the pinned/
+    // allowed app set - Home just re-navigates within it, recents only lists apps already in it,
+    // and status bar info is read-only. They're not real restrictions, just navigation
+    // convenience, so they're always on rather than admin-configurable (see device_detail.html).
+    let mut lock_task_features: i64 =
+        LOCK_FEATURE_SYSTEM_INFO | LOCK_FEATURE_HOME | LOCK_FEATURE_OVERVIEW;
     if fields.contains_key("lock_feature_notifications") {
         lock_task_features |= LOCK_FEATURE_NOTIFICATIONS;
-    }
-    if fields.contains_key("lock_feature_home") {
-        lock_task_features |= LOCK_FEATURE_HOME;
-    }
-    if fields.contains_key("lock_feature_overview") {
-        lock_task_features |= LOCK_FEATURE_OVERVIEW;
     }
     if fields.contains_key("lock_feature_global_actions") {
         lock_task_features |= LOCK_FEATURE_GLOBAL_ACTIONS;

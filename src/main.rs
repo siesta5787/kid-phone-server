@@ -26,7 +26,7 @@ pub const APP_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 async fn main() {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
-    tracing::info!("Kid Phone Server {APP_VERSION} starting");
+    tracing::info!("Kids Device MDM {APP_VERSION} starting");
 
     let database_url =
         std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://data/kidphone.db".into());

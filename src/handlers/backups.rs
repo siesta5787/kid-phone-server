@@ -818,7 +818,7 @@ pub async fn upload_backup(mut multipart: axum::extract::Multipart) -> impl Into
         return render_backups(
             None,
             Some(
-                "That doesn't look like a Kid Phone Server backup (couldn't find \
+                "That doesn't look like a Kids Device MDM backup (couldn't find \
                  kidphone.db inside the zip)."
                     .to_string(),
             ),

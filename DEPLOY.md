@@ -1,6 +1,6 @@
 # Deploying to a Raspberry Pi / DietPi
 
-These steps get Kid Phone Server running on a Raspberry Pi Zero 2 W. Only 64-bit (aarch64) is supported.
+These steps get Kids Device MDM running on a Raspberry Pi Zero 2 W. Only 64-bit (aarch64) is supported.
 
 ## 1. Install
 

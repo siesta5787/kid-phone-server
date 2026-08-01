@@ -1,6 +1,6 @@
 {
-    "name": "Kid Phone",
-    "short_name": "Kid Phone",
+    "name": "Kids Device MDM",
+    "short_name": "Kids MDM",
     "description": "Parental control admin console for the kids' phones",
     "start_url": "/",
     "scope": "/",
