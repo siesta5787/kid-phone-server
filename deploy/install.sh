@@ -22,7 +22,7 @@ SERVICE_USER="kidphone"
 # against its own required minimum (security::REQUIRED_WATCHER_SCHEMA) to
 # decide whether re-running this installer is actually necessary, rather
 # than just checking whether the release version strings happen to match.
-WATCHER_SCHEMA_VERSION="1"
+WATCHER_SCHEMA_VERSION="2"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Please run this as root (e.g. 'sudo bash install.sh')." >&2
@@ -41,7 +41,7 @@ echo "Detected architecture: $(uname -m) -> $TARGET"
 
 echo "Installing prerequisites..."
 apt-get update -qq
-apt-get install -y -qq curl tar unzip >/dev/null
+apt-get install -y -qq curl tar unzip iptables >/dev/null
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     echo "Creating service user '$SERVICE_USER'..."
@@ -177,6 +177,31 @@ action_tailscale_update() {
 
 action_reboot() {
     systemctl reboot
+}
+
+# Redirects port-53 DNS traffic arriving over the tailnet interface to the
+# app's own in-process DNS filter (see src/dns_engine.rs), which listens on
+# a plain unprivileged port (5300) - this rule is the only privileged part
+# of that feature. Scoped to tailscale0 specifically, so only traffic from a
+# device that's chosen this Pi as its Tailscale exit node is ever affected;
+# nothing else on the Pi's network stack is touched. Idempotent - checking
+# before adding (rather than just appending) means re-toggling the feature
+# on/off repeatedly, or re-running this installer, never leaves duplicate
+# rules behind.
+action_dns_filter_enable() {
+    for proto in udp tcp; do
+        iptables -t nat -C PREROUTING -i tailscale0 -p "$proto" --dport 53 \
+            -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || \
+        iptables -t nat -A PREROUTING -i tailscale0 -p "$proto" --dport 53 \
+            -j DNAT --to-destination 127.0.0.1:5300
+    done
+}
+
+action_dns_filter_disable() {
+    for proto in udp tcp; do
+        iptables -t nat -D PREROUTING -i tailscale0 -p "$proto" --dport 53 \
+            -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true
+    done
 }
 
 # Formats a removable drive as ext4 and mounts it at the external backup
@@ -329,6 +354,8 @@ case "$ACTION" in
     os_upgrade) action_os_upgrade ;;
     tailscale_update) action_tailscale_update ;;
     reboot) action_reboot ;;
+    dns_filter_enable) action_dns_filter_enable ;;
+    dns_filter_disable) action_dns_filter_disable ;;
     format_drive) action_format_drive "$ARG" ;;
     restore_backup) action_restore_backup "$ARG" ;;
     *)

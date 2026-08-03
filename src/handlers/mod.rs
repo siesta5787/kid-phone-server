@@ -3,6 +3,7 @@ pub mod auth;
 pub mod backups;
 pub mod device_api;
 pub mod devices;
+pub mod dns_filter;
 pub mod provisioning;
 pub mod settings;
 pub mod sw;

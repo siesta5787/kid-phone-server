@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>DNS/Filters</h1>
+    </div>
+    <p class="subtitle">Blocks ads, trackers, and other content network-wide for whichever device uses this Pi as its Tailscale exit node - built in, no separate app to install. See the "Connect your kid's device" card below for the one-time setup.</p>
+
+    <div class="card">
+        <form method="post" action="/dns/toggle">
+            <label class="checkbox-row">
+                <input type="checkbox" name="enabled" value="on" {% if settings.enabled %}checked{% endif %} onchange="this.form.submit()">
+                Enable DNS filtering
+            </label>
+        </form>
+        {% if settings.enabled %}
+        <p class="subtitle">{{ total_queries }} queries handled, {{ blocked_queries }} blocked, since {{ running_since }}.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Upstream resolver</h2>
+        <p class="subtitle">Where non-blocked queries get forwarded, encrypted (DNS-over-TLS).</p>
+        <form method="post" action="/dns/upstream">
+            <select name="upstream" onchange="this.form.submit()" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text);">
+                <option value="cloudflare" {% if settings.upstream == "cloudflare" %}selected{% endif %}>Cloudflare (1.1.1.1)</option>
+                <option value="quad9" {% if settings.upstream == "quad9" %}selected{% endif %}>Quad9 (9.9.9.9)</option>
+            </select>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Blocklists</h2>
+        {% for list in blocklists %}
+        <form method="post" action="/dns/blocklists/{{ list.id }}/toggle" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <label class="checkbox-row" style="flex:1;">
+                <input type="checkbox" name="enabled" value="on" {% if list.enabled %}checked{% endif %} onchange="this.form.submit()">
+                {{ list.name }}
+            </label>
+        </form>
+        {% endfor %}
+
+        <details style="margin-top:16px;">
+            <summary style="cursor:pointer;">Add a custom blocklist URL&hellip;</summary>
+            <form method="post" action="/dns/blocklists/new" style="margin-top:12px;">
+                <label for="bl_name">Name</label>
+                <input type="text" id="bl_name" name="name" placeholder="e.g. My custom list" required>
+                <label for="bl_url">URL (hosts-file format)</label>
+                <input type="text" id="bl_url" name="url" placeholder="https://..." required>
+                <button type="submit" class="button-small">Add</button>
+            </form>
+        </details>
+    </div>
+
+    <div class="card">
+        <h2>Custom blocked domains</h2>
+        {% if blocked_domains.is_empty() %}
+        <p class="subtitle">None yet.</p>
+        {% else %}
+        {% for d in blocked_domains %}
+        <div class="checkbox-row" style="display:flex; align-items:center; justify-content:space-between;">
+            <span>{{ d.domain }}</span>
+            <form method="post" action="/dns/domains/{{ d.id }}/delete">
+                <button type="submit" class="button-small button-danger">Remove</button>
+            </form>
+        </div>
+        {% endfor %}
+        {% endif %}
+        <form method="post" action="/dns/domains/new" style="margin-top:12px;">
+            <input type="hidden" name="list_type" value="block">
+            <input type="text" name="domain" placeholder="e.g. example.com" required>
+            <button type="submit" class="button-small">Block domain</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Custom allowed domains</h2>
+        <p class="subtitle">Always let through, even if it's on an enabled blocklist.</p>
+        {% if allowed_domains.is_empty() %}
+        <p class="subtitle">None yet.</p>
+        {% else %}
+        {% for d in allowed_domains %}
+        <div class="checkbox-row" style="display:flex; align-items:center; justify-content:space-between;">
+            <span>{{ d.domain }}</span>
+            <form method="post" action="/dns/domains/{{ d.id }}/delete">
+                <button type="submit" class="button-small button-danger">Remove</button>
+            </form>
+        </div>
+        {% endfor %}
+        {% endif %}
+        <form method="post" action="/dns/domains/new" style="margin-top:12px;">
+            <input type="hidden" name="list_type" value="allow">
+            <input type="text" name="domain" placeholder="e.g. example.com" required>
+            <button type="submit" class="button-small">Allow domain</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Connect your kid's device</h2>
+        <ol>
+            <li>In the <a href="https://login.tailscale.com/admin/machines">Tailscale admin console</a>, find this Pi, open its route settings, and turn on "Use as exit node".</li>
+            <li>
+                {% if let Some(ip) = tailscale_ip %}
+                On the kid's device, set this Pi as its exit node - this Pi's tailnet IP is <strong>{{ ip }}</strong>.
+                {% else %}
+                On the kid's device, set this Pi as its exit node (its tailnet IP will show here once Tailscale is running on the Pi).
+                {% endif %}
+            </li>
+            <li>Turn on "Require Tailscale to stay connected" on that device's page, with this as its exit node, so it can't be bypassed.</li>
+        </ol>
+        <p class="subtitle">Other devices on your tailnet are unaffected unless they also choose this Pi as their exit node.</p>
+    </div>
+</main>
+</body>
+</html>

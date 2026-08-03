@@ -95,6 +95,32 @@ pub struct TrackedApp {
     pub created_at: String,
 }
 
+/// Singleton row (id always 1) - see migrations/0009_dns_filter.sql.
+#[derive(sqlx::FromRow, Clone)]
+pub struct DnsFilterSettings {
+    pub id: i64,
+    pub enabled: bool,
+    pub upstream: String,
+    pub updated_at: String,
+}
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct DnsBlocklist {
+    pub id: i64,
+    pub name: String,
+    pub url: String,
+    pub enabled: bool,
+    pub created_at: String,
+}
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct DnsCustomDomain {
+    pub id: i64,
+    pub domain: String,
+    pub list_type: String,
+    pub created_at: String,
+}
+
 /// One entry in a device's self-reported installed-app list, used to build
 /// the admin UI's allowlist checkboxes from real data instead of asking a
 /// parent to type raw Android package names.

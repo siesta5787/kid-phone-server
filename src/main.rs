@@ -1,3 +1,4 @@
+mod dns_engine;
 mod handlers;
 mod models;
 mod security;
@@ -9,6 +10,7 @@ use axum::routing::{get, post};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous};
 use std::str::FromStr;
+use std::sync::Arc;
 use tower_http::services::ServeDir;
 use tower_sessions::cookie::time::Duration as CookieDuration;
 use tower_sessions::session_store::ExpiredDeletion;
@@ -18,6 +20,8 @@ use tower_sessions_sqlx_store::SqliteStore;
 #[derive(Clone)]
 pub struct AppState {
     pub db: SqlitePool,
+    pub dns_state: dns_engine::SharedDnsState,
+    pub dns_stats: Arc<dns_engine::Stats>,
 }
 
 pub const APP_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
@@ -27,6 +31,15 @@ async fn main() {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
     tracing::info!("Kids Device MDM {APP_VERSION} starting");
+
+    // Rustls 0.23+ requires an explicit process-wide default crypto provider
+    // before any TLS connection works - without this, the DNS filter's
+    // upstream (DNS-over-TLS) forwarding silently fails with
+    // NetError(NoConnections), no clearer error given. "ring" to match
+    // hickory-resolver's "tls-ring" feature.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install default rustls crypto provider");
 
     let database_url =
         std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://data/kidphone.db".into());
@@ -80,7 +93,12 @@ async fn main() {
         .with_expiry(Expiry::OnInactivity(CookieDuration::days(30)))
         .with_secure(!insecure_cookies);
 
-    let state = AppState { db };
+    let state = AppState {
+        db,
+        dns_state: dns_engine::empty_state(),
+        dns_stats: std::sync::Arc::new(dns_engine::Stats::default()),
+    };
+    dns_engine::rebuild(&state, &state.dns_state).await;
 
     // Reachable without any session at all. /sw.js lives here too - a
     // service-worker fetch has no session cookie context the way a page
@@ -165,6 +183,29 @@ async fn main() {
         .route(
             "/apps/tracked/{id}/delete",
             post(handlers::tracked_apps::delete_tracked_app),
+        )
+        .route("/dns", get(handlers::dns_filter::show_dns_filter))
+        .route("/dns/toggle", post(handlers::dns_filter::toggle_enabled))
+        .route("/dns/upstream", post(handlers::dns_filter::set_upstream))
+        .route(
+            "/dns/blocklists/new",
+            post(handlers::dns_filter::create_blocklist),
+        )
+        .route(
+            "/dns/blocklists/{id}/toggle",
+            post(handlers::dns_filter::toggle_blocklist),
+        )
+        .route(
+            "/dns/blocklists/{id}/delete",
+            post(handlers::dns_filter::delete_blocklist),
+        )
+        .route(
+            "/dns/domains/new",
+            post(handlers::dns_filter::create_custom_domain),
+        )
+        .route(
+            "/dns/domains/{id}/delete",
+            post(handlers::dns_filter::delete_custom_domain),
         )
         .route("/settings", get(handlers::settings::settings_hub))
         .route("/backups", get(handlers::backups::list_backups))
@@ -269,6 +310,11 @@ async fn main() {
     tokio::task::spawn(handlers::tracked_apps::run_scheduled_tracked_app_sync(
         state.clone(),
     ));
+    tokio::task::spawn(dns_engine::run(
+        state.dns_state.clone(),
+        state.dns_stats.clone(),
+    ));
+    tokio::task::spawn(handlers::dns_filter::run_blocklist_refresh(state.clone()));
 
     let app = Router::new()
         .merge(public_routes)
