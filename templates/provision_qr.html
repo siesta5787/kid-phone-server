@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container container-narrow">
+    <h1>Provision a new device</h1>
+    <p class="subtitle">Works on stock Android and most custom ROMs via the standard 6-tap QR provisioning flow. <strong>Does not currently work on GrapheneOS</strong> - its setup wizard doesn't have this hook built in yet (tracked upstream, not something we can fix here). For GrapheneOS, keep using the adb-based setup instead.</p>
+
+    <div class="card">
+        <h2>How to use it</h2>
+        <ol>
+            <li>Factory reset the device (or use one fresh out of the box).</li>
+            <li>On the Welcome screen, tap the same spot 6 times in a row.</li>
+            <li>Scan the QR code below when prompted.</li>
+            <li>Follow the on-screen setup - it downloads and installs the launcher and sets it as device owner automatically.</li>
+            <li>Once it boots into the launcher, open Settings and enter a device enrollment code from that device's page here, same as any other device.</li>
+        </ol>
+    </div>
+
+    <div class="card">
+        <h2>WiFi (optional)</h2>
+        <p class="subtitle">Fill this in to have the device join your network automatically during setup, before it downloads the launcher. Leave blank to connect manually during setup instead.</p>
+        <form method="post" action="/devices/provision">
+            <label for="wifi_ssid">Network name (SSID)</label>
+            <input type="text" id="wifi_ssid" name="wifi_ssid" value="{{ wifi_ssid }}" autocomplete="off">
+
+            <label for="wifi_password">Password</label>
+            <input type="text" id="wifi_password" name="wifi_password" autocomplete="off">
+
+            <button type="submit">Generate QR code</button>
+        </form>
+    </div>
+
+    {% if let Some(svg) = qr_svg %}
+    <div class="card">
+        <h2>Scan this</h2>
+        <div class="qr-code">{{ svg|safe }}</div>
+    </div>
+    {% endif %}
+</main>
+</body>
+</html>

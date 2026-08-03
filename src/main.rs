@@ -118,6 +118,10 @@ async fn main() {
             "/devices/new",
             get(handlers::devices::new_device_form).post(handlers::devices::create_device),
         )
+        .route(
+            "/devices/provision",
+            get(handlers::provisioning::provision_form).post(handlers::provisioning::generate_qr),
+        )
         .route("/devices/{id}", get(handlers::devices::view_device))
         .route(
             "/devices/{id}/policy",
