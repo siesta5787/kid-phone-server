@@ -134,12 +134,12 @@
         </label>
 
         <h2>VPN (Tailscale)</h2>
-        <p class="subtitle">Requires the Tailscale app to be installed and allowlisted on the phone. Enforced both at the app level (the kid can't disconnect Tailscale from within its own app once this is on) and at the OS level (Android's always-on VPN lockdown) - together these cover Tailscale's own Quick Settings tile too, which the app-level restriction alone doesn't reach.</p>
+        <p class="subtitle">Requires the Tailscale app to be installed and allowlisted on the phone. Enforced at the app level (the kid can't disconnect Tailscale from within its own app once this is on) always. The stronger OS-level enforcement (Android's always-on VPN lockdown, which also covers Tailscale's own Quick Settings tile) only turns on once an exit node is set below - <strong>without an exit node, Tailscale can't route general internet traffic, so OS-level lockdown would just cut off the phone's internet entirely</strong> (this is Tailscale's own documented behavior, not something we can fix on our end).</p>
         <label class="checkbox-row">
             <input type="checkbox" name="require_tailscale" value="on" {% if require_tailscale %}checked{% endif %}>
             Require Tailscale to stay connected
         </label>
-        <label for="tailscale_exit_node_id">Exit node ID (optional - leave blank until your exit node is set up)</label>
+        <label for="tailscale_exit_node_id">Exit node ID (required for the stronger OS-level enforcement above - leave blank until your exit node is set up)</label>
         <input type="text" id="tailscale_exit_node_id" name="tailscale_exit_node_id" value="{{ tailscale_exit_node_id }}" autocomplete="off">
 
         <h2>Offline override PIN</h2>
