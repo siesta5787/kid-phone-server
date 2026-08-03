@@ -4,7 +4,6 @@ pub mod backups;
 pub mod device_api;
 pub mod devices;
 pub mod provisioning;
-pub mod releases;
 pub mod settings;
 pub mod sw;
 pub mod system_maintenance;

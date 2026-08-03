@@ -11,17 +11,10 @@
         <a href="/apps/tracked/new" class="button-small">Add an app</a>
     </div>
 
+    {% if tracked.is_empty() %}
+    <p class="empty-state">No apps yet. Add one to get started.</p>
+    {% else %}
     <div class="device-list">
-        <a class="device-card" href="/apps/launcher">
-            <span class="device-name">Kids Launcher</span>
-            <span class="device-status">
-                {% if let Some(release) = current %}
-                Version {{ release.version_name }}
-                {% else %}
-                No release uploaded yet
-                {% endif %}
-            </span>
-        </a>
         {% for app in tracked %}
         <a class="device-card" href="/apps/tracked/{{ app.id }}">
             <span class="device-name">{{ app.name }}</span>
@@ -35,6 +28,7 @@
         </a>
         {% endfor %}
     </div>
+    {% endif %}
 </main>
 </body>
 </html>

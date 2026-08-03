@@ -5,8 +5,8 @@ use axum::{Extension, Json};
 
 use crate::AppState;
 use crate::models::{
-    Device, DevicePolicy, EnrollRequest, EnrollResponse, LauncherRelease, LauncherUpdateResponse,
-    PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
+    Device, DevicePolicy, EnrollRequest, EnrollResponse, PolicyResponse, StatusReportRequest,
+    TrackedApp, TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -131,54 +131,13 @@ pub async fn status(
     StatusCode::NO_CONTENT
 }
 
-async fn latest_release(state: &AppState) -> Option<LauncherRelease> {
-    sqlx::query_as::<_, LauncherRelease>("SELECT * FROM launcher_releases ORDER BY id DESC LIMIT 1")
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten()
-}
-
-pub async fn launcher_update(
-    State(state): State<AppState>,
-    Extension(AuthedDevice(_device)): Extension<AuthedDevice>,
-) -> impl IntoResponse {
-    match latest_release(&state).await {
-        Some(release) => Json(LauncherUpdateResponse {
-            version_code: release.version_code,
-            version_name: release.version_name,
-            download_url: "/api/devices/launcher-update/download".to_string(),
-        })
-        .into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
-pub async fn launcher_update_download(
-    State(state): State<AppState>,
-    Extension(AuthedDevice(_device)): Extension<AuthedDevice>,
-) -> impl IntoResponse {
-    let Some(release) = latest_release(&state).await else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-
-    match tokio::fs::read(&release.file_path).await {
-        Ok(bytes) => (
-            [(
-                header::CONTENT_TYPE,
-                "application/vnd.android.package-archive",
-            )],
-            bytes,
-        )
-            .into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
-/// Every enabled tracked app that has a synced release - the generalized,
-/// multi-app counterpart to `launcher_update` above. `download_url` is
-/// computed per-row rather than a fixed string, since there's one download
-/// endpoint per app id.
+/// Every enabled tracked app that has a synced release - covers the
+/// launcher's own self-update too now, since it's just another row here.
+/// `download_url` is computed per-row rather than a fixed string, since
+/// there's one download endpoint per app id. `release_tag` is composited
+/// with the asset id when one's cached (GitHub-sourced apps) - see
+/// `handlers::tracked_apps::sync_one_app`'s doc comment for why a rolling
+/// tag alone can't be trusted to signal "this is a new build" client-side.
 pub async fn tracked_app_updates(
     State(state): State<AppState>,
     Extension(AuthedDevice(_device)): Extension<AuthedDevice>,
@@ -193,9 +152,14 @@ pub async fn tracked_app_updates(
     let updates: Vec<TrackedAppUpdate> = apps
         .into_iter()
         .filter_map(|app| {
+            let tag = app.latest_release_tag?;
+            let release_tag = match app.latest_release_asset_id {
+                Some(asset_id) => format!("{tag}@{asset_id}"),
+                None => tag,
+            };
             Some(TrackedAppUpdate {
                 package_name: app.package_name,
-                release_tag: app.latest_release_tag?,
+                release_tag,
                 download_url: format!("/api/devices/apps/{}/download", app.id),
             })
         })

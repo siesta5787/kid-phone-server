@@ -7,7 +7,7 @@
 {% include "partials/app_header.html" %}
 <main class="container container-narrow">
     <h1>Add an app</h1>
-    <p class="subtitle">Watches a GitHub repo's Releases for a new APK and pushes it to devices automatically, the same way the launcher updates itself.</p>
+    <p class="subtitle">Either watch a GitHub repo's Releases for a new APK and push it to devices automatically, or upload APKs yourself whenever a new version is ready. Both work the same way once set up - devices get updates either way, silently.</p>
     <form method="post" action="/apps/tracked/new">
         <label for="name">Name</label>
         <input type="text" id="name" name="name" placeholder="e.g. Tailscale" required autofocus>
@@ -15,12 +15,29 @@
         <label for="package_name">Android package name</label>
         <input type="text" id="package_name" name="package_name" placeholder="e.g. com.tailscale.ipn" required>
 
-        <label for="github_repo">GitHub repo</label>
-        <input type="text" id="github_repo" name="github_repo" placeholder="e.g. tailscale/tailscale-android" required>
+        <label class="checkbox-row">
+            <input type="radio" name="source_type" value="github" checked onchange="document.getElementById('source_github_fields').style.display='';">
+            Track a GitHub repo's Releases
+        </label>
+        <label class="checkbox-row">
+            <input type="radio" name="source_type" value="manual" onchange="document.getElementById('source_github_fields').style.display='none';">
+            I'll upload APKs myself
+        </label>
 
-        <label for="asset_pattern">Asset filename filter (optional)</label>
-        <input type="text" id="asset_pattern" name="asset_pattern" placeholder="Leave blank to use the first .apk found">
-        <p class="hint">Only needed if a release has more than one APK (e.g. per architecture) - the first asset whose filename contains this text is used.</p>
+        <div id="source_github_fields">
+            <label for="github_repo">GitHub repo</label>
+            <input type="text" id="github_repo" name="github_repo" placeholder="e.g. tailscale/tailscale-android">
+
+            <label for="asset_pattern">Asset filename filter (optional)</label>
+            <input type="text" id="asset_pattern" name="asset_pattern" placeholder="Leave blank to use the first .apk found">
+            <p class="hint">Only needed if a release has more than one APK (e.g. per architecture) - the first asset whose filename contains this text is used.</p>
+
+            <label class="checkbox-row">
+                <input type="checkbox" name="include_prereleases" value="on">
+                Include pre-releases
+            </label>
+            <p class="hint">Needed for a repo that only ever publishes to a rolling/pre-release tag (like this project's own launcher) - otherwise a repo with no full releases will never be found.</p>
+        </div>
 
         <button type="submit">Add app</button>
     </form>

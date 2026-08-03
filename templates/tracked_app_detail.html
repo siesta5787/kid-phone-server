@@ -11,13 +11,17 @@
     </div>
 
     {% if let Some(e) = error %}
-    <div class="error">Check failed: {{ e }}</div>
+    <div class="error">{{ e }}</div>
     {% endif %}
 
     <div class="card">
         <h2>Status</h2>
         <p>Package: <strong>{{ app.package_name }}</strong></p>
+        {% if app.source_type == "github" %}
         <p>Source: <a href="https://github.com/{{ app.github_repo }}">{{ app.github_repo }}</a></p>
+        {% else %}
+        <p>Source: manually uploaded</p>
+        {% endif %}
         {% if let Some(tag) = app.latest_release_tag %}
         <p>Current synced release: <strong>{{ tag }}</strong></p>
         {% else %}
@@ -28,6 +32,7 @@
         {% endif %}
     </div>
 
+    {% if app.source_type == "github" %}
     <div class="card">
         <form method="post" action="/apps/tracked/{{ app.id }}/check">
             <button type="submit">Check now</button>
@@ -35,10 +40,34 @@
     </div>
 
     <div class="card">
+        <form method="post" action="/apps/tracked/{{ app.id }}/include-prereleases">
+            <label class="checkbox-row">
+                <input type="checkbox" name="include_prereleases" value="on" {% if app.include_prereleases %}checked{% endif %} onchange="this.form.submit()">
+                Include pre-releases
+            </label>
+            <p class="hint">Needed for a repo that only ever publishes to a rolling/pre-release tag - otherwise a repo with no full releases will never be found.</p>
+        </form>
+    </div>
+    {% else %}
+    <div class="card">
+        <h2>Upload a new release</h2>
+        <form method="post" action="/apps/tracked/{{ app.id }}/upload" enctype="multipart/form-data">
+            <label for="release_label">Release label</label>
+            <input type="text" id="release_label" name="release_label" placeholder="e.g. 1.2.0" required>
+
+            <label for="apk">APK file</label>
+            <input type="file" id="apk" name="apk" accept=".apk" required>
+
+            <button type="submit">Upload</button>
+        </form>
+    </div>
+    {% endif %}
+
+    <div class="card">
         <form method="post" action="/apps/tracked/{{ app.id }}/enabled">
             <label class="checkbox-row">
                 <input type="checkbox" name="enabled" value="on" {% if app.enabled %}checked{% endif %} onchange="this.form.submit()">
-                Enabled - checked automatically every hour
+                Enabled - {% if app.source_type == "github" %}checked automatically every hour{% else %}pushed to devices when synced{% endif %}
             </label>
         </form>
     </div>

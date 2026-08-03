@@ -135,17 +135,7 @@ async fn main() {
             "/devices/{id}/delete",
             post(handlers::devices::delete_device),
         )
-        .route("/apps", get(handlers::releases::list_apps))
-        .route("/apps/launcher", get(handlers::releases::list_releases))
-        .route(
-            "/apps/launcher/upload",
-            post(handlers::releases::upload_release)
-                .layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
-        )
-        .route(
-            "/apps/launcher/{id}/delete",
-            post(handlers::releases::delete_release),
-        )
+        .route("/apps", get(handlers::tracked_apps::list_apps))
         .route(
             "/apps/tracked/new",
             get(handlers::tracked_apps::new_tracked_app_form)
@@ -156,12 +146,21 @@ async fn main() {
             get(handlers::tracked_apps::view_tracked_app),
         )
         .route(
+            "/apps/tracked/{id}/upload",
+            post(handlers::tracked_apps::upload_tracked_app_release)
+                .layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
+        )
+        .route(
             "/apps/tracked/{id}/check",
             post(handlers::tracked_apps::check_now),
         )
         .route(
             "/apps/tracked/{id}/enabled",
             post(handlers::tracked_apps::set_enabled),
+        )
+        .route(
+            "/apps/tracked/{id}/include-prereleases",
+            post(handlers::tracked_apps::set_include_prereleases),
         )
         .route(
             "/apps/tracked/{id}/delete",
@@ -249,14 +248,6 @@ async fn main() {
     let device_authed_routes = Router::new()
         .route("/api/devices/policy", get(handlers::device_api::policy))
         .route("/api/devices/status", post(handlers::device_api::status))
-        .route(
-            "/api/devices/launcher-update",
-            get(handlers::device_api::launcher_update),
-        )
-        .route(
-            "/api/devices/launcher-update/download",
-            get(handlers::device_api::launcher_update_download),
-        )
         .route(
             "/api/devices/apps",
             get(handlers::device_api::tracked_app_updates),

@@ -75,23 +75,21 @@ pub struct BannedIp {
 }
 
 #[derive(sqlx::FromRow, Clone)]
-pub struct LauncherRelease {
-    pub id: i64,
-    pub version_code: i64,
-    pub version_name: String,
-    pub file_path: String,
-    pub uploaded_at: String,
-}
-
-#[derive(sqlx::FromRow, Clone)]
 pub struct TrackedApp {
     pub id: i64,
     pub name: String,
     pub package_name: String,
+    /// "github" or "manual" - see migrations/0008_tracked_apps_source_type.sql.
+    pub source_type: String,
+    /// Empty string (not NULL) for manual-source apps - avoids a SQLite
+    /// table rebuild to loosen the original NOT NULL constraint; a real
+    /// repo string is never empty, so it's an unambiguous sentinel.
     pub github_repo: String,
     pub asset_pattern: Option<String>,
+    pub include_prereleases: bool,
     pub enabled: bool,
     pub latest_release_tag: Option<String>,
+    pub latest_release_asset_id: Option<i64>,
     pub latest_release_file_path: Option<String>,
     pub last_checked_at: Option<String>,
     pub created_at: String,
@@ -150,13 +148,6 @@ pub struct StatusReportRequest {
     pub app_version_code: Option<i64>,
     #[serde(default)]
     pub offline_override_used: bool,
-}
-
-#[derive(Serialize)]
-pub struct LauncherUpdateResponse {
-    pub version_code: i64,
-    pub version_name: String,
-    pub download_url: String,
 }
 
 #[derive(Serialize)]
