@@ -262,7 +262,6 @@ struct DeviceDetailTemplate {
     kiosk_desired: bool,
     lock_feature_notifications: bool,
     lock_feature_global_actions: bool,
-    lock_feature_keyguard: bool,
     wifi_mode: String,
     bluetooth_mode: String,
     pin_configured: bool,
@@ -366,7 +365,6 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             kiosk_desired: policy.kiosk_desired,
             lock_feature_notifications: lock_task_features & LOCK_FEATURE_NOTIFICATIONS != 0,
             lock_feature_global_actions: lock_task_features & LOCK_FEATURE_GLOBAL_ACTIONS != 0,
-            lock_feature_keyguard: lock_task_features & LOCK_FEATURE_KEYGUARD != 0,
             wifi_mode: policy.wifi_mode,
             bluetooth_mode: policy.bluetooth_mode,
             pin_configured: policy.override_pin_hash.is_some(),
@@ -413,16 +411,28 @@ pub async fn update_policy(
     // allowed app set - Home just re-navigates within it, recents only lists apps already in it,
     // and status bar info is read-only. They're not real restrictions, just navigation
     // convenience, so they're always on rather than admin-configurable (see device_detail.html).
-    let mut lock_task_features: i64 =
-        LOCK_FEATURE_SYSTEM_INFO | LOCK_FEATURE_HOME | LOCK_FEATURE_OVERVIEW;
+    //
+    // Keyguard is also forced on unconditionally, for a very different reason: a real device got
+    // stuck at boot after GrapheneOS's own auto-reboot-after-inactivity feature re-locked storage
+    // (Before First Unlock/FBE) while this bit was off. LOCK_TASK_FEATURE_KEYGUARD is disabled by
+    // default in lock-task mode, and that suppression is a DevicePolicyManager-level setting
+    // enforced by system_server itself - it keeps applying even before the device is decrypted,
+    // when this app's own process can't run at all (its components aren't resolvable pre-unlock).
+    // With keyguard off and this app the exclusive enforced Home app, there was no lock screen to
+    // enter a PIN into *and* no launcher available either - a total deadlock recoverable only via
+    // hardware-level recovery mode. Forcing this bit on guarantees Android's own (already
+    // direct-boot-aware) keyguard can always come up after any reboot, regardless of kiosk
+    // config. The real tradeoff: every kiosk-mode device now also requires a PIN to resume from
+    // sleep, not just after a reboot - Android doesn't expose those as separate bits.
+    let mut lock_task_features: i64 = LOCK_FEATURE_SYSTEM_INFO
+        | LOCK_FEATURE_HOME
+        | LOCK_FEATURE_OVERVIEW
+        | LOCK_FEATURE_KEYGUARD;
     if fields.contains_key("lock_feature_notifications") {
         lock_task_features |= LOCK_FEATURE_NOTIFICATIONS;
     }
     if fields.contains_key("lock_feature_global_actions") {
         lock_task_features |= LOCK_FEATURE_GLOBAL_ACTIONS;
-    }
-    if fields.contains_key("lock_feature_keyguard") {
-        lock_task_features |= LOCK_FEATURE_KEYGUARD;
     }
 
     let wifi_mode = normalize_radio_mode(&field("wifi_mode"));

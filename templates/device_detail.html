@@ -43,7 +43,7 @@
             Restrict this phone to only the apps allowed below
         </label>
 
-        <p class="subtitle">Home, status bar, and recents are always available while pinned - they don't let a kid reach anything outside the allowed apps. Choose what else stays available:</p>
+        <p class="subtitle">Home, status bar, and recents are always available while pinned - they don't let a kid reach anything outside the allowed apps. The lock screen is also always on (a PIN is required to resume the phone) - this isn't optional, because Android suppresses the lock screen by default while pinned, and without it a device that reboots on its own (e.g. GrapheneOS's auto-reboot-after-inactivity) can get stuck with no way to unlock at all. Choose what else stays available:</p>
         <label class="checkbox-row">
             <input type="checkbox" name="lock_feature_notifications" value="on" {% if lock_feature_notifications %}checked{% endif %}>
             Notifications
@@ -51,10 +51,6 @@
         <label class="checkbox-row">
             <input type="checkbox" name="lock_feature_global_actions" value="on" {% if lock_feature_global_actions %}checked{% endif %}>
             Power button menu
-        </label>
-        <label class="checkbox-row">
-            <input type="checkbox" name="lock_feature_keyguard" value="on" {% if lock_feature_keyguard %}checked{% endif %}>
-            Lock screen (a PIN is required to resume the phone)
         </label>
 
         <h2>Allowed apps</h2>
