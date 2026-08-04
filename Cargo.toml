@@ -1,6 +1,6 @@
 [package]
 name = "kid_phone_server"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
@@ -29,6 +29,7 @@ totp-rs = { version = "5.7.2", features = ["gen_secret", "qr"] }
 tower-http = { version = "0.7.0", features = ["fs", "set-header"] }
 tower-sessions = "0.14"
 tower-sessions-sqlx-store = { version = "0.15.0", features = ["sqlite"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "kid_phone_server"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "argon2",
  "askama",
@@ -1373,6 +1373,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tokio",
+ "tokio-stream",
  "totp-rs",
  "tower-http 0.7.0",
  "tower-sessions",
@@ -2923,6 +2924,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

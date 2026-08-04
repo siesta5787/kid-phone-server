@@ -1,7 +1,13 @@
+use std::convert::Infallible;
+use std::time::Duration;
+
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Extension, Json};
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 
 use crate::AppState;
 use crate::models::{
@@ -205,6 +211,27 @@ pub async fn command_result(
     .ok();
 
     StatusCode::NO_CONTENT
+}
+
+/// Held open by the client's foreground service (see kids-launcher-mdm's `CommandListenerService`)
+/// for near-instant ring/lock/stop-ring/wipe delivery - a supplement to, not a replacement for,
+/// the regular 2-minute policy poll (which is still the actual delivery mechanism; this only tells
+/// the device *when* to poll early). Every event is a content-free "something changed, go check"
+/// nudge, not the command payload itself - the client always re-fetches `GET /api/devices/policy`
+/// to get the real `pending_command`, reusing the exact same dispatch path as a normal scheduled
+/// sync. `KeepAlive` pings keep the connection alive through idle proxies/NATs and let the client
+/// detect a silently-dead connection and reconnect.
+pub async fn commands_stream(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let device_id = device.id;
+    let rx = state.command_notify.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(move |msg| match msg {
+        Ok(id) if id == device_id => Some(Ok(Event::default().data("command"))),
+        _ => None,
+    });
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
 /// Every enabled tracked app that has a synced release - covers the

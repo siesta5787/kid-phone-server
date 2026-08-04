@@ -22,6 +22,13 @@ pub struct AppState {
     pub db: SqlitePool,
     pub dns_state: dns_engine::SharedDnsState,
     pub dns_stats: Arc<dns_engine::Stats>,
+    /// Broadcasts a device id the instant a command is queued for it (see
+    /// `handlers::locate::queue_command`) - lets `handlers::device_api::commands_stream`'s SSE
+    /// connection wake a connected device immediately instead of waiting for its next 2-minute
+    /// policy poll. A `send` with no active subscribers (device offline/asleep) is expected and
+    /// harmless - that device just picks the command up on its next regular poll instead, same as
+    /// before this existed.
+    pub command_notify: tokio::sync::broadcast::Sender<i64>,
 }
 
 pub const APP_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
@@ -93,10 +100,12 @@ async fn main() {
         .with_expiry(Expiry::OnInactivity(CookieDuration::days(30)))
         .with_secure(!insecure_cookies);
 
+    let (command_notify, _) = tokio::sync::broadcast::channel(64);
     let state = AppState {
         db,
         dns_state: dns_engine::empty_state(),
         dns_stats: std::sync::Arc::new(dns_engine::Stats::default()),
+        command_notify,
     };
     dns_engine::rebuild(&state, &state.dns_state).await;
 
@@ -159,6 +168,10 @@ async fn main() {
             get(handlers::locate::locations_json),
         )
         .route("/devices/{id}/command/ring", post(handlers::locate::ring))
+        .route(
+            "/devices/{id}/command/stop-ring",
+            post(handlers::locate::stop_ring),
+        )
         .route("/devices/{id}/command/lock", post(handlers::locate::lock))
         .route("/devices/{id}/command/wipe", post(handlers::locate::wipe))
         .route("/apps", get(handlers::tracked_apps::list_apps))
@@ -300,6 +313,10 @@ async fn main() {
         .route(
             "/api/devices/command-result",
             post(handlers::device_api::command_result),
+        )
+        .route(
+            "/api/devices/commands/stream",
+            get(handlers::device_api::commands_stream),
         )
         .route(
             "/api/devices/apps",

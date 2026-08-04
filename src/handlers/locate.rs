@@ -96,6 +96,11 @@ pub async fn locations_json(
 /// new one - "your last action wins", and doubles as a way to cancel a
 /// queued-but-not-yet-delivered wipe by queuing something else before it
 /// lands. Once a command is delivered it's no longer touched by this.
+/// Broadcasts on `command_notify` afterwards so a connected device's SSE
+/// listener (see `device_api::commands_stream`) wakes it immediately instead
+/// of waiting for its next 2-minute poll - a `send` with no subscribers
+/// (device offline/asleep) is expected and harmless, it just falls back to
+/// that regular poll.
 async fn queue_command(state: &AppState, device_id: i64, command: &str) {
     sqlx::query("DELETE FROM device_commands WHERE device_id = ? AND delivered_at IS NULL")
         .bind(device_id)
@@ -108,6 +113,8 @@ async fn queue_command(state: &AppState, device_id: i64, command: &str) {
         .execute(&state.db)
         .await
         .ok();
+
+    let _ = state.command_notify.send(device_id);
 }
 
 pub async fn ring(
@@ -122,6 +129,23 @@ pub async fn ring(
         Some(&admin.username),
         None,
         Some("ring"),
+    )
+    .await;
+    Redirect::to(&format!("/devices/locate?device={id}"))
+}
+
+pub async fn stop_ring(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Extension(CurrentAdmin(admin)): Extension<CurrentAdmin>,
+) -> impl IntoResponse {
+    queue_command(&state, id, "stop_ring").await;
+    security::record_security_event(
+        &state.db,
+        "device_command_queued",
+        Some(&admin.username),
+        None,
+        Some("stop_ring"),
     )
     .await;
     Redirect::to(&format!("/devices/locate?device={id}"))
