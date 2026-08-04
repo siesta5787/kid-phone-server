@@ -121,6 +121,34 @@ pub struct DnsCustomDomain {
     pub created_at: String,
 }
 
+/// One point in a device's location trail - see migrations/0010_find_my_device.sql.
+/// `captured_at` is the device's own fix timestamp, not when the server received it.
+#[derive(sqlx::FromRow, Clone, Serialize)]
+pub struct DeviceLocation {
+    pub id: i64,
+    pub device_id: i64,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub accuracy_meters: Option<f64>,
+    pub captured_at: String,
+    pub received_at: String,
+}
+
+/// A queued remote command (ring/lock/wipe/locate) - `delivered_at` is set the
+/// instant `policy()` serves it to the device, `acknowledged_at` when the
+/// device reports back (never, for `wipe`). See
+/// migrations/0010_find_my_device.sql.
+#[derive(sqlx::FromRow, Clone)]
+pub struct DeviceCommand {
+    pub id: i64,
+    pub device_id: i64,
+    pub command: String,
+    pub requested_at: String,
+    pub delivered_at: Option<String>,
+    pub acknowledged_at: Option<String>,
+    pub result: Option<String>,
+}
+
 /// One entry in a device's self-reported installed-app list, used to build
 /// the admin UI's allowlist checkboxes from real data instead of asking a
 /// parent to type raw Android package names.
@@ -163,6 +191,17 @@ pub struct PolicyResponse {
     pub require_tailscale: bool,
     pub tailscale_exit_node_id: Option<String>,
     pub quick_controls_mask: i64,
+    pub pending_command: Option<PendingCommand>,
+}
+
+/// The oldest undelivered [DeviceCommand] for this device, if any - `policy()`
+/// marks it delivered the instant it's serialized into a response, so a
+/// second poll before the device acknowledges never hands out the same
+/// command twice. See `handlers::device_api::policy`.
+#[derive(Serialize)]
+pub struct PendingCommand {
+    pub id: i64,
+    pub command: String,
 }
 
 #[derive(Deserialize)]
@@ -174,6 +213,26 @@ pub struct StatusReportRequest {
     pub app_version_code: Option<i64>,
     #[serde(default)]
     pub offline_override_used: bool,
+    pub location: Option<LocationReport>,
+}
+
+/// Attached to a status report whenever the device has a location reading
+/// available - on every regular heartbeat, not just after a `locate` command
+/// (see kids-launcher-mdm's `MdmSyncWorker`) - so the trail on the admin map
+/// stays reasonably fresh without needing repeated explicit requests.
+#[derive(Deserialize)]
+pub struct LocationReport {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub accuracy_meters: Option<f64>,
+    pub captured_at: String,
+}
+
+#[derive(Deserialize)]
+pub struct CommandResultRequest {
+    pub command_id: i64,
+    pub success: bool,
+    pub message: Option<String>,
 }
 
 #[derive(Serialize)]

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+<link rel="stylesheet" href="/static/leaflet/leaflet.css">
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>Find My Device</h1>
+    </div>
+    <p class="subtitle">Locate, ring, lock, or wipe a device. Commands are picked up the next time the device checks in (usually within a couple of minutes), not delivered instantly.</p>
+
+    {% if devices.is_empty() %}
+    <p class="empty-state">No devices yet.</p>
+    {% else %}
+    <div class="card">
+        <label for="device_select">Device</label>
+        <select id="device_select" onchange="if (this.value) location.href='/devices/locate?device=' + this.value;" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text);">
+            <option value="">Choose a device&hellip;</option>
+            {% for d in devices %}
+            <option value="{{ d.id }}" {% if d.id == selected_id %}selected{% endif %}>{{ d.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    {% if let Some(device) = selected %}
+
+    {% if let Some(err) = wipe_error %}
+    <div class="card"><p class="error">{{ err }}</p></div>
+    {% endif %}
+
+    <div class="card">
+        <div id="map" style="height:400px; border-radius:8px;"></div>
+    </div>
+
+    <div class="card" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start;">
+        <form method="post" action="/devices/{{ device.id }}/command/ring">
+            <button type="submit" class="button-small">Ring</button>
+        </form>
+        <form method="post" action="/devices/{{ device.id }}/command/lock">
+            <button type="submit" class="button-small">Lock</button>
+        </form>
+        <details>
+            <summary class="button-small button-danger" style="display:inline-block; cursor:pointer;">Wipe&hellip;</summary>
+            <form method="post" action="/devices/{{ device.id }}/command/wipe" style="margin-top:8px; min-width:280px;">
+                <div class="error" style="margin-bottom:8px;">This erases the device completely and can't be undone. There's no way to confirm afterward that it actually happened, since a wiped device can't check back in.</div>
+                <label for="confirm_wipe">Type the device name ({{ device.name }}) to confirm</label>
+                <input type="text" id="confirm_wipe" name="confirm_name" placeholder="{{ device.name }}">
+                <button type="submit" class="button-small button-danger">Wipe this device</button>
+            </form>
+        </details>
+    </div>
+
+    <div class="card">
+        <h2>Recent commands</h2>
+        {% if commands.is_empty() %}
+        <p class="subtitle">None yet.</p>
+        {% else %}
+        <table>
+            <thead><tr><th>Command</th><th>Requested</th><th>Status</th></tr></thead>
+            <tbody>
+            {% for c in commands %}
+            <tr>
+                <td>{{ c.command }}</td>
+                <td>{{ c.requested_at }}</td>
+                <td>
+                    {% if let Some(result) = c.result %}
+                    Done ({{ result }})
+                    {% else if let Some(delivered) = c.delivered_at %}
+                    Delivered {{ delivered }}, waiting for confirmation
+                    {% else %}
+                    Waiting for device to check in
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+
+    <script src="/static/leaflet/leaflet.js"></script>
+    <script>
+    (function () {
+        var map = L.map('map');
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+        // Point Leaflet's default marker icon at our own vendored images -
+        // its built-in default assumes a CDN-relative path that only works
+        // when a bundler rewrites it, which this project deliberately has none of.
+        L.Icon.Default.mergeOptions({
+            iconUrl: '/static/leaflet/images/marker-icon.png',
+            iconRetinaUrl: '/static/leaflet/images/marker-icon-2x.png',
+            shadowUrl: '/static/leaflet/images/marker-shadow.png'
+        });
+
+        fetch('/devices/{{ device.id }}/locations.json')
+            .then(function (r) { return r.json(); })
+            .then(function (points) {
+                if (points.length === 0) {
+                    map.setView([20, 0], 2);
+                    return;
+                }
+                var latlngs = points.map(function (p) { return [p.latitude, p.longitude]; });
+                L.polyline(latlngs, { color: '#3388ff' }).addTo(map);
+                var last = points[points.length - 1];
+                L.marker([last.latitude, last.longitude])
+                    .addTo(map)
+                    .bindPopup('Last seen ' + last.captured_at)
+                    .openPopup();
+                map.fitBounds(latlngs, { maxZoom: 16, padding: [30, 30] });
+            })
+            .catch(function () { map.setView([20, 0], 2); });
+    })();
+    </script>
+    {% endif %}
+    {% endif %}
+</main>
+</body>
+</html>

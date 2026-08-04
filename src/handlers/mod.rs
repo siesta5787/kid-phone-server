@@ -4,6 +4,7 @@ pub mod backups;
 pub mod device_api;
 pub mod devices;
 pub mod dns_filter;
+pub mod locate;
 pub mod provisioning;
 pub mod settings;
 pub mod sw;

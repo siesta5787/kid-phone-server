@@ -153,6 +153,14 @@ async fn main() {
             "/devices/{id}/delete",
             post(handlers::devices::delete_device),
         )
+        .route("/devices/locate", get(handlers::locate::show_locate))
+        .route(
+            "/devices/{id}/locations.json",
+            get(handlers::locate::locations_json),
+        )
+        .route("/devices/{id}/command/ring", post(handlers::locate::ring))
+        .route("/devices/{id}/command/lock", post(handlers::locate::lock))
+        .route("/devices/{id}/command/wipe", post(handlers::locate::wipe))
         .route("/apps", get(handlers::tracked_apps::list_apps))
         .route(
             "/apps/tracked/new",
@@ -290,6 +298,10 @@ async fn main() {
         .route("/api/devices/policy", get(handlers::device_api::policy))
         .route("/api/devices/status", post(handlers::device_api::status))
         .route(
+            "/api/devices/command-result",
+            post(handlers::device_api::command_result),
+        )
+        .route(
             "/api/devices/apps",
             get(handlers::device_api::tracked_app_updates),
         )
@@ -315,6 +327,7 @@ async fn main() {
         state.dns_stats.clone(),
     ));
     tokio::task::spawn(handlers::dns_filter::run_blocklist_refresh(state.clone()));
+    tokio::task::spawn(handlers::locate::run_location_pruning(state.clone()));
 
     let app = Router::new()
         .merge(public_routes)

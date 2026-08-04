@@ -5,8 +5,8 @@ use axum::{Extension, Json};
 
 use crate::AppState;
 use crate::models::{
-    Device, DevicePolicy, EnrollRequest, EnrollResponse, PolicyResponse, StatusReportRequest,
-    TrackedApp, TrackedAppUpdate,
+    CommandResultRequest, Device, DeviceCommand, DevicePolicy, EnrollRequest, EnrollResponse,
+    PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -75,6 +75,34 @@ pub async fn policy(
         .as_deref()
         .and_then(|j| serde_json::from_str::<Vec<String>>(j).ok());
 
+    // The oldest undelivered command, if any - marked delivered right here,
+    // in the same request that serves it, so a second poll before the device
+    // acknowledges never hands out the same command twice. See
+    // migrations/0010_find_my_device.sql and handlers::locate.
+    let pending = sqlx::query_as::<_, DeviceCommand>(
+        "SELECT * FROM device_commands WHERE device_id = ? AND delivered_at IS NULL \
+         ORDER BY requested_at ASC LIMIT 1",
+    )
+    .bind(device.id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let pending_command = if let Some(cmd) = pending {
+        sqlx::query("UPDATE device_commands SET delivered_at = datetime('now') WHERE id = ?")
+            .bind(cmd.id)
+            .execute(&state.db)
+            .await
+            .ok();
+        Some(PendingCommand {
+            id: cmd.id,
+            command: cmd.command,
+        })
+    } else {
+        None
+    };
+
     Json(PolicyResponse {
         allowlist,
         weekday_start_minutes: policy.weekday_start_minutes,
@@ -92,6 +120,7 @@ pub async fn policy(
         require_tailscale: policy.require_tailscale,
         tailscale_exit_node_id: policy.tailscale_exit_node_id,
         quick_controls_mask: policy.quick_controls_mask,
+        pending_command,
     })
     .into_response()
 }
@@ -127,6 +156,53 @@ pub async fn status(
         .execute(&state.db)
         .await
         .ok();
+
+    // Attached on every regular heartbeat when the device has a location
+    // reading available, not just after a `locate` command - see
+    // LocationReport's doc comment. Pruned on a schedule (30 days) by
+    // handlers::locate::run_location_pruning.
+    if let Some(loc) = report.location {
+        sqlx::query(
+            "INSERT INTO device_locations \
+             (device_id, latitude, longitude, accuracy_meters, captured_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(device.id)
+        .bind(loc.latitude)
+        .bind(loc.longitude)
+        .bind(loc.accuracy_meters)
+        .bind(&loc.captured_at)
+        .execute(&state.db)
+        .await
+        .ok();
+    }
+
+    StatusCode::NO_CONTENT
+}
+
+/// The device reports back whether a delivered command actually succeeded -
+/// never called for `wipe` (the device is gone by the time it would report).
+/// Scoped to this device's own commands only, so one device can't ack
+/// another's queue entry.
+pub async fn command_result(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
+    Json(req): Json<CommandResultRequest>,
+) -> impl IntoResponse {
+    sqlx::query(
+        "UPDATE device_commands SET acknowledged_at = datetime('now'), result = ? \
+         WHERE id = ? AND device_id = ?",
+    )
+    .bind(if req.success {
+        req.message.unwrap_or_else(|| "ok".to_string())
+    } else {
+        req.message.unwrap_or_else(|| "failed".to_string())
+    })
+    .bind(req.command_id)
+    .bind(device.id)
+    .execute(&state.db)
+    .await
+    .ok();
 
     StatusCode::NO_CONTENT
 }
