@@ -534,6 +534,12 @@ pub async fn update_policy(
     .await
     .ok();
 
+    // Nudges the device to re-sync immediately over the same SSE connection Find My Device uses
+    // for ring/lock, rather than waiting out the rest of the background poll interval - the nudge
+    // itself carries no data, the device just re-fetches /api/devices/policy on it, so this reuses
+    // the exact same dispatch path as a normal scheduled sync.
+    let _ = state.command_notify.send(id);
+
     Redirect::to(&format!("/devices/{id}"))
 }
 
