@@ -41,7 +41,7 @@ echo "Detected architecture: $(uname -m) -> $TARGET"
 
 echo "Installing prerequisites..."
 apt-get update -qq
-apt-get install -y -qq curl tar unzip iptables >/dev/null
+apt-get install -y -qq curl tar unzip iptables jq >/dev/null
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     echo "Creating service user '$SERVICE_USER'..."
@@ -234,7 +234,16 @@ action_dns_filter_disable() {
 # actually gets picked up - dns_engine.rs only loads it once at startup.
 action_tls_cert_renew() {
     local hostname
-    hostname="$(tailscale status --json | grep -o '"DNSName":"[^"]*"' | head -1 | cut -d'"' -f4 | sed 's/\.$//')"
+    # jq, not grep - `tailscale status --json` includes a DNSName field on
+    # *every* peer, not just Self, so a plain grep can match the wrong one
+    # (or, combined with `set -e`+pipefail above, die completely silently if
+    # it happens to match nothing at all - confirmed live, no error printed
+    # anywhere). `// empty` makes a missing/null .Self.DNSName produce an
+    # empty string rather than a jq parse failure, so this always reaches
+    # the explicit check below instead of dying earlier for an unrelated
+    # reason. Mirrors the same jq-not-grep lesson already learned for
+    # `tailscale status --json | jq -r '.Self.ID'` elsewhere in this project.
+    hostname="$(tailscale status --json | jq -r '.Self.DNSName // empty' | sed 's/\.$//')"
     if [ -z "$hostname" ]; then
         echo "Couldn't determine this Pi's own tailnet hostname - is tailscaled running and this device logged in?" >&2
         exit 1
