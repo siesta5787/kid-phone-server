@@ -280,7 +280,7 @@ pub async fn installed_watcher_version() -> Option<String> {
 /// comparing raw version strings directly was the wrong check (it fired on
 /// every single app release regardless of whether the watcher itself had
 /// changed at all).
-pub const REQUIRED_WATCHER_SCHEMA: u32 = 2;
+pub const REQUIRED_WATCHER_SCHEMA: u32 = 3;
 
 async fn installed_watcher_schema() -> Option<u32> {
     let raw = tokio::fs::read_to_string("data/watcher_schema_version")

@@ -192,6 +192,15 @@ pub struct PolicyResponse {
     pub tailscale_exit_node_id: Option<String>,
     pub quick_controls_mask: i64,
     pub pending_command: Option<PendingCommand>,
+    /// Mirrors `dns_filter_settings.enabled` (a global, not per-device,
+    /// setting) - when true, the client locks Android's system Private DNS
+    /// to this server's own hostname via
+    /// `DevicePolicyManager.setGlobalPrivateDnsModeSpecifiedHost`, so DNS
+    /// resolution goes straight to the filter engine over DNS-over-TLS
+    /// (port 853) regardless of exit-node routing or app-level DNS-over-
+    /// HTTPS settings that would otherwise bypass the plain-port-53 path.
+    /// See `dns_engine.rs`'s module doc comment for the full picture.
+    pub force_private_dns_to_pi: bool,
 }
 
 /// The oldest undelivered [DeviceCommand] for this device, if any - `policy()`

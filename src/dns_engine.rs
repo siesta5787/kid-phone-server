@@ -4,12 +4,21 @@
 //! background task alongside the axum HTTP server and the other
 //! `tokio::task::spawn`'d loops in `main.rs`.
 //!
-//! Global/singleton, not per-device: the kid's phone is scoped to this
-//! filtering by choosing this Pi as its Tailscale exit node (a separate,
-//! OS-level decision) - nothing in here needs to know about individual
-//! devices. Only the kid's device, which never gets its DNS queries here at
-//! all unless the `iptables` redirect (a privileged action, requested the
-//! same way `system_maintenance.rs` requests a reboot) is in place.
+//! Global/singleton, not per-device: nothing in here needs to know about
+//! individual devices. Two independent ways a device's DNS queries actually
+//! reach this engine: (1) plain port 53, requires the device to be using
+//! this Pi as its Tailscale exit node *and* the `iptables` redirect (a
+//! privileged action, requested the same way `system_maintenance.rs`
+//! requests a reboot) to be in place - confirmed live to have a lot of
+//! failure modes (exit-node routing quirks, OS/browser-level DNS-over-HTTPS
+//! bypassing plain port 53 entirely, Tailscale's own MagicDNS override
+//! intercepting queries before they ever reach this Pi); (2) DNS-over-TLS on
+//! [DOT_LISTEN_PORT], which the client force-locks Android's system Private
+//! DNS setting to via `DevicePolicyManager.setGlobalPrivateDnsModeSpecifiedHost`
+//! - this is the more reliable path, since it only requires the device to be
+//! a normal tailnet peer (not exit-node routing), and Device-Owner-locks the
+//! setting so it can't be switched back. See `AppEnforcer.applyPrivateDnsLock`
+//! on the client for that side.
 //!
 //! Blocking uses `hickory_server::store::blocklist::BlocklistZoneHandler`
 //! (a first-party, ready-made component of the library itself) chained
@@ -30,12 +39,16 @@ use hickory_proto::rr::Name;
 use hickory_resolver::config::{NameServerConfig, ResolverOpts};
 use hickory_server::Server;
 use hickory_server::net::runtime::Time;
-use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
+use hickory_server::server::{
+    Request, RequestHandler, ResponseHandler, ResponseInfo, default_tls_server_config,
+};
 use hickory_server::store::blocklist::{
     BlocklistConfig, BlocklistConsultAction, BlocklistZoneHandler,
 };
 use hickory_server::store::forwarder::{ForwardConfig, ForwardZoneHandler};
 use hickory_server::zone_handler::{Catalog, ZoneHandler};
+use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::sign::CertifiedKey;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::RwLock;
 
@@ -49,6 +62,11 @@ const CUSTOM_BLOCKLIST_FILE: &str = "custom.txt";
 /// non-root systemd unit. The `iptables` redirect (privileged, requested
 /// separately) is what routes real port-53 traffic here.
 const LISTEN_PORT: u16 = 5300;
+/// Same unprivileged-port-plus-iptables-redirect pattern as [LISTEN_PORT],
+/// just for port 853 (DNS-over-TLS) instead of 53.
+const DOT_LISTEN_PORT: u16 = 8853;
+const TLS_CERT_PATH: &str = "data/tls/cert.pem";
+const TLS_KEY_PATH: &str = "data/tls/key.pem";
 
 pub struct Stats {
     pub total_queries: AtomicU64,
@@ -89,6 +107,44 @@ pub fn empty_state() -> SharedDnsState {
         catalog: Catalog::new(),
         blocked_domains: HashSet::new(),
     }))
+}
+
+/// Unconditionally resolves to the one cert this Pi has - there's only ever
+/// a single hostname (this Pi's own tailnet MagicDNS name) a DoT client
+/// would present via SNI, so no per-hostname lookup logic is needed.
+struct SingleCertResolver(Arc<CertifiedKey>);
+
+impl std::fmt::Debug for SingleCertResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SingleCertResolver").finish()
+    }
+}
+
+impl ResolvesServerCert for SingleCertResolver {
+    fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        Some(self.0.clone())
+    }
+}
+
+/// Loads the DoT certificate/key pair from disk, if present - `None` (not an
+/// error) is the expected, normal state before `tailscale cert` has ever
+/// been run on this Pi (see `deploy/install.sh`'s `action_tls_cert_renew`),
+/// and just means DNS-over-TLS doesn't start this run; the plain port-53
+/// path keeps working regardless.
+fn load_tls_resolver() -> Option<Arc<dyn ResolvesServerCert>> {
+    let cert_bytes = std::fs::read(TLS_CERT_PATH).ok()?;
+    let key_bytes = std::fs::read(TLS_KEY_PATH).ok()?;
+
+    let certs = rustls_pemfile::certs(&mut cert_bytes.as_slice())
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let key = rustls_pemfile::private_key(&mut key_bytes.as_slice())
+        .ok()
+        .flatten()?;
+
+    let provider = rustls::crypto::ring::default_provider();
+    let certified_key = CertifiedKey::from_der(certs, key, &provider).ok()?;
+    Some(Arc::new(SingleCertResolver(Arc::new(certified_key))))
 }
 
 fn is_blocked(name: &str, blocked_domains: &HashSet<String>) -> bool {
@@ -344,6 +400,32 @@ pub async fn run(shared: SharedDnsState, stats: Arc<Stats>) {
     match TcpListener::bind(&tcp_addr).await {
         Ok(listener) => server.register_listener(listener, std::time::Duration::from_secs(5), 4096),
         Err(e) => tracing::warn!("failed to bind DNS filter TCP listener {tcp_addr}: {e}"),
+    }
+
+    match load_tls_resolver() {
+        Some(resolver) => {
+            let dot_addr = format!("127.0.0.1:{DOT_LISTEN_PORT}");
+            match TcpListener::bind(&dot_addr).await {
+                Ok(listener) => match default_tls_server_config(b"dot", resolver) {
+                    Ok(tls_config) => {
+                        if let Err(e) = server.register_tls_listener_with_tls_config(
+                            listener,
+                            std::time::Duration::from_secs(5),
+                            Arc::new(tls_config),
+                        ) {
+                            tracing::error!("failed to register DoT listener: {e}");
+                        } else {
+                            tracing::info!("DNS-over-TLS listening on {dot_addr}");
+                        }
+                    }
+                    Err(e) => tracing::error!("failed to build DoT TLS config: {e}"),
+                },
+                Err(e) => tracing::warn!("failed to bind DoT TCP listener {dot_addr}: {e}"),
+            }
+        }
+        None => tracing::info!(
+            "No TLS cert at {TLS_CERT_PATH} - DNS-over-TLS not started (run `tailscale cert` on the Pi, or wait for the scheduled renewal action, to enable it)"
+        ),
     }
 
     if let Err(e) = server.block_until_done().await {

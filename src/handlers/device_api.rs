@@ -11,8 +11,9 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::AppState;
 use crate::models::{
-    CommandResultRequest, Device, DeviceCommand, DevicePolicy, EnrollRequest, EnrollResponse,
-    PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
+    CommandResultRequest, Device, DeviceCommand, DevicePolicy, DnsFilterSettings, EnrollRequest,
+    EnrollResponse, PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp,
+    TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -109,6 +110,16 @@ pub async fn policy(
         None
     };
 
+    // Global, not per-device - see dns_engine.rs's module doc comment and
+    // PolicyResponse.force_private_dns_to_pi's own doc comment.
+    let force_private_dns_to_pi =
+        sqlx::query_as::<_, DnsFilterSettings>("SELECT * FROM dns_filter_settings WHERE id = 1")
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|s| s.enabled);
+
     Json(PolicyResponse {
         allowlist,
         weekday_start_minutes: policy.weekday_start_minutes,
@@ -127,6 +138,7 @@ pub async fn policy(
         tailscale_exit_node_id: policy.tailscale_exit_node_id,
         quick_controls_mask: policy.quick_controls_mask,
         pending_command,
+        force_private_dns_to_pi,
     })
     .into_response()
 }

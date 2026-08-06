@@ -22,7 +22,7 @@ SERVICE_USER="kidphone"
 # against its own required minimum (security::REQUIRED_WATCHER_SCHEMA) to
 # decide whether re-running this installer is actually necessary, rather
 # than just checking whether the release version strings happen to match.
-WATCHER_SCHEMA_VERSION="2"
+WATCHER_SCHEMA_VERSION="3"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Please run this as root (e.g. 'sudo bash install.sh')." >&2
@@ -195,6 +195,24 @@ action_dns_filter_enable() {
         iptables -t nat -A PREROUTING -i tailscale0 -p "$proto" --dport 53 \
             -j DNAT --to-destination 127.0.0.1:5300
     done
+    # DNS-over-TLS (port 853, TCP-only - it's TLS-over-TCP by definition) -
+    # this is what Android's Private DNS "specified host" mode actually
+    # connects to once the client locks it to this Pi's own hostname, and
+    # (unlike the plain port-53 redirect above) works for any tailnet peer,
+    # not just a device that's chosen this Pi as its exit node.
+    iptables -t nat -C PREROUTING -i tailscale0 -p tcp --dport 853 \
+        -j DNAT --to-destination 127.0.0.1:8853 2>/dev/null || \
+    iptables -t nat -A PREROUTING -i tailscale0 -p tcp --dport 853 \
+        -j DNAT --to-destination 127.0.0.1:8853
+    # Best-effort, non-fatal: request_privileged_action only writes one flag
+    # file at a time, so this can't be requested as a second, separate
+    # action alongside this one without racing it - folding it in here
+    # instead means turning filtering on also gets a DoT cert issued
+    # immediately, rather than waiting for the next scheduled daily renewal.
+    # `|| true` so a cert failure (e.g. "HTTPS Certificates" not yet turned
+    # on for this tailnet) never blocks the plain-DNS path above, which just
+    # succeeded and doesn't depend on this at all.
+    action_tls_cert_renew || true
 }
 
 action_dns_filter_disable() {
@@ -202,6 +220,36 @@ action_dns_filter_disable() {
         iptables -t nat -D PREROUTING -i tailscale0 -p "$proto" --dport 53 \
             -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true
     done
+    iptables -t nat -D PREROUTING -i tailscale0 -p tcp --dport 853 \
+        -j DNAT --to-destination 127.0.0.1:8853 2>/dev/null || true
+}
+
+# (Re)issues this Pi's own tailnet TLS certificate for DNS-over-TLS, via
+# Tailscale's own built-in ACME/HTTPS-certificate support (needs "HTTPS
+# Certificates" turned on for this tailnet in the Tailscale admin console
+# first - a one-time manual step, not something this script can enable on
+# its own). Safe to call whether or not a cert already exists - `tailscale
+# cert` renews in place and is a no-op if the current cert is still valid
+# for a while yet. Restarts the app afterward so a freshly (re)issued cert
+# actually gets picked up - dns_engine.rs only loads it once at startup.
+action_tls_cert_renew() {
+    local hostname
+    hostname="$(tailscale status --json | grep -o '"DNSName":"[^"]*"' | head -1 | cut -d'"' -f4 | sed 's/\.$//')"
+    if [ -z "$hostname" ]; then
+        echo "Couldn't determine this Pi's own tailnet hostname - is tailscaled running and this device logged in?" >&2
+        exit 1
+    fi
+    mkdir -p "$DATA_DIR/tls"
+    if tailscale cert \
+        --cert-file "$DATA_DIR/tls/cert.pem" \
+        --key-file "$DATA_DIR/tls/key.pem" \
+        "$hostname"; then
+        chown -R kidphone:kidphone "$DATA_DIR/tls"
+        systemctl restart kid-phone-server
+    else
+        echo "tailscale cert failed - has 'HTTPS Certificates' been turned on for this tailnet in the admin console?" >&2
+        exit 1
+    fi
 }
 
 # Formats a removable drive as ext4 and mounts it at the external backup
@@ -356,6 +404,7 @@ case "$ACTION" in
     reboot) action_reboot ;;
     dns_filter_enable) action_dns_filter_enable ;;
     dns_filter_disable) action_dns_filter_disable ;;
+    tls_cert_renew) action_tls_cert_renew ;;
     format_drive) action_format_drive "$ARG" ;;
     restore_backup) action_restore_backup "$ARG" ;;
     *)
@@ -460,8 +509,23 @@ if [ "$CONTINUOUS_MIRROR_ENABLED" = "true" ] && [ -f "$DATA_DIR/live_mirror.db" 
 fi
 BACKUP_SYNC_EOF
 
+# Runs on a timer, not flag-triggered - same reasoning as scheduler.sh/
+# backup_sync.sh above: this is a trusted, non-network-facing component, so
+# it can call action_tls_cert_renew directly rather than going through the
+# flag-file indirection. Renewing daily regardless of whether DNS filtering
+# is currently on keeps a valid cert ready in advance of ever being needed -
+# `tailscale cert` is a cheap no-op when the current cert isn't due for
+# renewal yet, so this doesn't need to check the feature's on/off state
+# first (which would mean querying the app's own SQLite DB from bash).
+cat >"$UPDATER_DIR/tls_cert_renew.sh" <<'TLS_CERT_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source /opt/kid-phone-server-updater/actions.sh
+action_tls_cert_renew
+TLS_CERT_EOF
+
 chown -R root:root "$UPDATER_DIR"
-chmod 700 "$UPDATER_DIR" "$UPDATER_DIR/actions.sh" "$UPDATER_DIR/watcher.sh" "$UPDATER_DIR/scheduler.sh" "$UPDATER_DIR/backup_sync.sh"
+chmod 700 "$UPDATER_DIR" "$UPDATER_DIR/actions.sh" "$UPDATER_DIR/watcher.sh" "$UPDATER_DIR/scheduler.sh" "$UPDATER_DIR/backup_sync.sh" "$UPDATER_DIR/tls_cert_renew.sh"
 
 cat >/etc/systemd/system/kid-phone-server-updater.path <<'PATH_EOF'
 [Unit]
@@ -525,10 +589,32 @@ Type=oneshot
 ExecStart=/opt/kid-phone-server-updater/backup_sync.sh
 BACKUP_SERVICE_EOF
 
+cat >/etc/systemd/system/kid-phone-server-tls-cert.timer <<'TLS_TIMER_EOF'
+[Unit]
+Description=Renew Kid Phone Server's DNS-over-TLS certificate daily
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1d
+
+[Install]
+WantedBy=timers.target
+TLS_TIMER_EOF
+
+cat >/etc/systemd/system/kid-phone-server-tls-cert.service <<'TLS_SERVICE_EOF'
+[Unit]
+Description=Renew Kid Phone Server's DNS-over-TLS certificate via tailscale cert
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kid-phone-server-updater/tls_cert_renew.sh
+TLS_SERVICE_EOF
+
 systemctl daemon-reload
 systemctl enable --now kid-phone-server-updater.path
 systemctl enable --now kid-phone-server-scheduler.timer
 systemctl enable --now kid-phone-server-backup-sync.timer
+systemctl enable --now kid-phone-server-tls-cert.timer
 
 echo ""
 echo "=========================================="
