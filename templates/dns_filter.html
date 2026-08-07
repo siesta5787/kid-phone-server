@@ -101,6 +101,87 @@
     </div>
 
     <div class="card">
+        <h2>Per-device overrides</h2>
+        <p class="subtitle">Turn a feed off for just one kid, or block/allow specific domains only on their device. Everything above is the site-wide default.</p>
+        {% if devices.is_empty() %}
+        <p class="empty-state">No devices yet.</p>
+        {% else %}
+        <label for="device_select">Device</label>
+        <select id="device_select" onchange="if (this.value) location.href='/dns?device=' + this.value; else location.href='/dns';" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text);">
+            <option value="">Choose a device&hellip;</option>
+            {% for d in devices %}
+            <option value="{{ d.id }}" {% if d.id == selected_id %}selected{% endif %}>{{ d.name }}</option>
+            {% endfor %}
+        </select>
+
+        {% if let Some(device) = selected %}
+        <div style="margin-top:16px;">
+            <h3 style="margin-bottom:8px;">Blocklists for {{ device.name }}</h3>
+            {% for row in device_blocklist_rows %}
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:4px;">
+                <form method="post" action="/dns/devices/{{ device.id }}/blocklists/{{ row.blocklist.id }}/override" style="flex:1;">
+                    <label class="checkbox-row">
+                        <input type="checkbox" name="enabled" value="on" {% if row.effective_enabled %}checked{% endif %} onchange="this.form.submit()">
+                        {{ row.blocklist.name }}
+                        {% if row.is_override %}<span class="subtitle">(overridden)</span>{% endif %}
+                    </label>
+                </form>
+                {% if row.is_override %}
+                <form method="post" action="/dns/devices/{{ device.id }}/blocklists/{{ row.blocklist.id }}/override">
+                    <input type="hidden" name="clear" value="1">
+                    <button type="submit" class="button-small button-secondary">Use default</button>
+                </form>
+                {% endif %}
+            </div>
+            {% endfor %}
+
+            <h3 style="margin:16px 0 8px;">Blocked just on {{ device.name }}</h3>
+            {% if device_blocked_domains.is_empty() %}
+            <p class="subtitle">None yet.</p>
+            {% else %}
+            {% for d in device_blocked_domains %}
+            <div class="checkbox-row" style="display:flex; align-items:center; justify-content:space-between;">
+                <span>{{ d.domain }}</span>
+                <form method="post" action="/dns/domains/{{ d.id }}/delete">
+                    <button type="submit" class="button-small button-danger">Remove</button>
+                </form>
+            </div>
+            {% endfor %}
+            {% endif %}
+            <form method="post" action="/dns/domains/new" style="margin-top:12px;">
+                <input type="hidden" name="list_type" value="block">
+                <input type="hidden" name="device_id" value="{{ device.id }}">
+                <input type="text" name="domain" placeholder="e.g. example.com" required>
+                <button type="submit" class="button-small">Block domain on this device</button>
+            </form>
+
+            <h3 style="margin:16px 0 8px;">Allowed just on {{ device.name }}</h3>
+            {% if device_allowed_domains.is_empty() %}
+            <p class="subtitle">None yet.</p>
+            {% else %}
+            {% for d in device_allowed_domains %}
+            <div class="checkbox-row" style="display:flex; align-items:center; justify-content:space-between;">
+                <span>{{ d.domain }}</span>
+                <form method="post" action="/dns/domains/{{ d.id }}/delete">
+                    <button type="submit" class="button-small button-danger">Remove</button>
+                </form>
+            </div>
+            {% endfor %}
+            {% endif %}
+            <form method="post" action="/dns/domains/new" style="margin-top:12px;">
+                <input type="hidden" name="list_type" value="allow">
+                <input type="hidden" name="device_id" value="{{ device.id }}">
+                <input type="text" name="domain" placeholder="e.g. example.com" required>
+                <button type="submit" class="button-small">Allow domain on this device</button>
+            </form>
+
+            <p style="margin-top:16px;"><a href="/dns/log?device={{ device.id }}">See what's been blocked on {{ device.name }} &rarr;</a></p>
+        </div>
+        {% endif %}
+        {% endif %}
+    </div>
+
+    <div class="card">
         <h2>Connect your kid's device</h2>
         <ol>
             <li>In the <a href="https://login.tailscale.com/admin/machines">Tailscale admin console</a>, find this Pi, open its route settings, and turn on "Use as exit node".</li>

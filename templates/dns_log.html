@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>Blocked activity</h1>
+    </div>
+    <p class="subtitle">What the on-device filter has blocked recently, so you can see if something's worth a conversation.</p>
+
+    {% if devices.is_empty() %}
+    <p class="empty-state">No devices yet.</p>
+    {% else %}
+    <div class="card">
+        <label for="device_select">Device</label>
+        <select id="device_select" onchange="if (this.value) location.href='/dns/log?device=' + this.value;" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text);">
+            <option value="">Choose a device&hellip;</option>
+            {% for d in devices %}
+            <option value="{{ d.id }}" {% if d.id == selected_id %}selected{% endif %}>{{ d.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    {% if let Some(device) = selected %}
+    <div class="card">
+        <h2>Recent blocks for {{ device.name }}</h2>
+        {% if events.is_empty() %}
+        <p class="subtitle">Nothing blocked yet.</p>
+        {% else %}
+        <table>
+            <thead><tr><th>Domain</th><th>Category</th><th>When</th></tr></thead>
+            <tbody>
+            {% for e in events %}
+            <tr>
+                <td>{{ e.domain }}</td>
+                <td>{{ e.category }}</td>
+                <td>{{ e.blocked_at }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% endif %}
+</main>
+</body>
+</html>

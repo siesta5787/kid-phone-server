@@ -22,6 +22,11 @@ pub struct AppState {
     pub db: SqlitePool,
     pub dns_state: dns_engine::SharedDnsState,
     pub dns_stats: Arc<dns_engine::Stats>,
+    /// The client-side-filtering replacement for `dns_state` - see
+    /// `dns_engine::CompiledBlocklist`'s doc comment. `dns_state`/`dns_stats`
+    /// go away once Phase E of the on-device-filtering migration retires the
+    /// live hickory DNS server; this is what replaces them.
+    pub dns_compiled: dns_engine::SharedCompiledBlocklist,
     /// Broadcasts a device id the instant a command is queued for it (see
     /// `handlers::locate::queue_command`) - lets `handlers::device_api::commands_stream`'s SSE
     /// connection wake a connected device immediately instead of waiting for its next 2-minute
@@ -105,9 +110,11 @@ async fn main() {
         db,
         dns_state: dns_engine::empty_state(),
         dns_stats: std::sync::Arc::new(dns_engine::Stats::default()),
+        dns_compiled: dns_engine::empty_compiled_blocklist(),
         command_notify,
     };
     dns_engine::rebuild(&state, &state.dns_state).await;
+    dns_engine::compile_blocklist(&state, &state.dns_compiled).await;
 
     // Reachable without any session at all. /sw.js lives here too - a
     // service-worker fetch has no session cookie context the way a page
@@ -228,6 +235,11 @@ async fn main() {
             "/dns/domains/{id}/delete",
             post(handlers::dns_filter::delete_custom_domain),
         )
+        .route(
+            "/dns/devices/{device_id}/blocklists/{blocklist_id}/override",
+            post(handlers::dns_filter::set_device_blocklist_override),
+        )
+        .route("/dns/log", get(handlers::dns_filter::show_dns_log))
         .route("/settings", get(handlers::settings::settings_hub))
         .route("/backups", get(handlers::backups::list_backups))
         .route("/backups/create", post(handlers::backups::create_backup))
@@ -326,6 +338,14 @@ async fn main() {
             "/api/devices/apps/{id}/download",
             get(handlers::device_api::tracked_app_download),
         )
+        .route(
+            "/api/devices/dns-blocklist",
+            get(handlers::device_api::dns_blocklist),
+        )
+        .route(
+            "/api/devices/dns-events",
+            post(handlers::device_api::dns_events),
+        )
         .layer(from_fn_with_state(
             state.clone(),
             security::require_device_token,
@@ -344,6 +364,7 @@ async fn main() {
         state.dns_stats.clone(),
     ));
     tokio::task::spawn(handlers::dns_filter::run_blocklist_refresh(state.clone()));
+    tokio::task::spawn(handlers::dns_filter::run_dns_event_pruning(state.clone()));
     tokio::task::spawn(handlers::locate::run_location_pruning(state.clone()));
 
     let app = Router::new()

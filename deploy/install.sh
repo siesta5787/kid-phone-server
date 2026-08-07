@@ -43,6 +43,26 @@ echo "Installing prerequisites..."
 apt-get update -qq
 apt-get install -y -qq curl tar unzip iptables jq >/dev/null
 
+# The DNS/DoT redirect rules below DNAT tailscale0 traffic to 127.0.0.1 (see
+# action_dns_filter_enable). Without route_localnet, the kernel treats a
+# post-DNAT packet destined for 127.0.0.1 as martian when it arrived on a
+# real interface and drops it silently *after* the NAT rule already counted
+# it as matched - iptables counters look fine, the DNAT rule looks fine, and
+# the connection just times out with no error anywhere. Set on both `all`
+# (OR'd live against the per-interface value on every packet, so it covers
+# tailscale0 immediately regardless of boot ordering) and `default` (the
+# template a newly-created interface's own value is seeded from) since the
+# kernel docs don't spell out which one actually governs a VPN interface
+# that doesn't exist yet when sysctl.d applies at boot.
+cat >/etc/sysctl.d/99-kid-phone-server.conf <<EOF
+net.ipv4.conf.all.route_localnet=1
+net.ipv4.conf.default.route_localnet=1
+EOF
+sysctl -p /etc/sysctl.d/99-kid-phone-server.conf >/dev/null
+if ip link show tailscale0 >/dev/null 2>&1; then
+    sysctl -w net.ipv4.conf.tailscale0.route_localnet=1 >/dev/null
+fi
+
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     echo "Creating service user '$SERVICE_USER'..."
     useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"

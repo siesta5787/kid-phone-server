@@ -118,7 +118,35 @@ pub struct DnsCustomDomain {
     pub id: i64,
     pub domain: String,
     pub list_type: String,
+    /// NULL = applies to all devices, set = this device only. See
+    /// migrations/0011_client_side_dns_filtering.sql.
+    pub device_id: Option<i64>,
     pub created_at: String,
+}
+
+/// Per-device on/off override for a curated blocklist feed - absence of a
+/// row for a given device means "use `DnsBlocklist.enabled`". See
+/// migrations/0011_client_side_dns_filtering.sql.
+#[derive(sqlx::FromRow, Clone)]
+pub struct DeviceBlocklistOverride {
+    pub device_id: i64,
+    pub blocklist_id: i64,
+    pub enabled: bool,
+    pub updated_at: String,
+}
+
+/// One blocked-domain event, self-reported by the device's on-device filter -
+/// `blocked_at` is the device's own timestamp, `received_at` is server
+/// ingest time (mirrors `DeviceLocation`'s captured_at/received_at split).
+/// See migrations/0011_client_side_dns_filtering.sql.
+#[derive(sqlx::FromRow, Clone, Serialize)]
+pub struct DeviceDnsEvent {
+    pub id: i64,
+    pub device_id: i64,
+    pub domain: String,
+    pub category: String,
+    pub blocked_at: String,
+    pub received_at: String,
 }
 
 /// One point in a device's location trail - see migrations/0010_find_my_device.sql.
@@ -192,15 +220,17 @@ pub struct PolicyResponse {
     pub tailscale_exit_node_id: Option<String>,
     pub quick_controls_mask: i64,
     pub pending_command: Option<PendingCommand>,
-    /// Mirrors `dns_filter_settings.enabled` (a global, not per-device,
-    /// setting) - when true, the client locks Android's system Private DNS
-    /// to this server's own hostname via
-    /// `DevicePolicyManager.setGlobalPrivateDnsModeSpecifiedHost`, so DNS
-    /// resolution goes straight to the filter engine over DNS-over-TLS
-    /// (port 853) regardless of exit-node routing or app-level DNS-over-
-    /// HTTPS settings that would otherwise bypass the plain-port-53 path.
-    /// See `dns_engine.rs`'s module doc comment for the full picture.
-    pub force_private_dns_to_pi: bool,
+    /// Opaque token summarizing this device's fully-resolved blocklist
+    /// (global feeds + this device's overrides + global/device-scoped custom
+    /// domains). The client compares this against its last-fetched value and
+    /// only calls `GET /api/devices/dns-blocklist` (a potentially 100k+
+    /// domain payload) when it actually changes, rather than on every
+    /// 2-minute sync. See `handlers::device_api::policy`.
+    pub dns_filter_version: String,
+    /// Which public DoT resolver the client's on-device filter should send
+    /// allowed (non-blocked) queries to - "cloudflare" or "quad9", mirrors
+    /// `dns_filter_settings.upstream`.
+    pub dns_upstream_provider: String,
 }
 
 /// The oldest undelivered [DeviceCommand] for this device, if any - `policy()`
@@ -242,6 +272,29 @@ pub struct CommandResultRequest {
     pub command_id: i64,
     pub success: bool,
     pub message: Option<String>,
+}
+
+/// One blocked-domain event as reported by the device - see
+/// `POST /api/devices/dns-events` and migrations/0011_client_side_dns_filtering.sql.
+/// The client already knows which category caused the block (it evaluated
+/// the domain against its own locally-cached, categorized list), so this
+/// carries that through rather than the server re-deriving it.
+#[derive(Deserialize)]
+pub struct DnsEventReport {
+    pub domain: String,
+    pub category: String,
+    pub blocked_at: String,
+}
+
+/// Response body for `GET /api/devices/dns-blocklist` - this device's fully
+/// resolved effective blocklist, grouped by category rather than a flat
+/// domain->category map, since at ~100k+ domains a flat JSON object would
+/// repeat far more per-key overhead (quoted key + colon per domain) than
+/// writing the category name once per group.
+#[derive(Serialize)]
+pub struct DnsBlocklistCategory {
+    pub category: String,
+    pub domains: Vec<String>,
 }
 
 #[derive(Serialize)]

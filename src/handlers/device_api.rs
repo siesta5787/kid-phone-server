@@ -11,9 +11,9 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::AppState;
 use crate::models::{
-    CommandResultRequest, Device, DeviceCommand, DevicePolicy, DnsFilterSettings, EnrollRequest,
-    EnrollResponse, PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp,
-    TrackedAppUpdate,
+    CommandResultRequest, Device, DeviceCommand, DevicePolicy, DnsBlocklistCategory,
+    DnsEventReport, DnsFilterSettings, EnrollRequest, EnrollResponse, PendingCommand,
+    PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -110,15 +110,16 @@ pub async fn policy(
         None
     };
 
-    // Global, not per-device - see dns_engine.rs's module doc comment and
-    // PolicyResponse.force_private_dns_to_pi's own doc comment.
-    let force_private_dns_to_pi =
+    let dns_upstream_provider =
         sqlx::query_as::<_, DnsFilterSettings>("SELECT * FROM dns_filter_settings WHERE id = 1")
             .fetch_optional(&state.db)
             .await
             .ok()
             .flatten()
-            .is_some_and(|s| s.enabled);
+            .map(|s| s.upstream)
+            .unwrap_or_else(|| "cloudflare".to_string());
+
+    let dns_filter_version = compute_dns_filter_version(&state, device.id).await;
 
     Json(PolicyResponse {
         allowlist,
@@ -138,9 +139,170 @@ pub async fn policy(
         tailscale_exit_node_id: policy.tailscale_exit_node_id,
         quick_controls_mask: policy.quick_controls_mask,
         pending_command,
-        force_private_dns_to_pi,
+        dns_filter_version,
+        dns_upstream_provider,
     })
     .into_response()
+}
+
+/// Opaque per-device token combining the global compiled blocklist's content
+/// hash with a summary of this device's own overrides/custom domains, so the
+/// client can tell "has my effective blocklist changed since I last fetched
+/// it" (see `PolicyResponse.dns_filter_version`'s doc comment) without
+/// needing to compare the full ~100k+ domain list on every poll.
+async fn compute_dns_filter_version(state: &AppState, device_id: i64) -> String {
+    use sha2::{Digest, Sha256};
+
+    let global_hash = state.dns_compiled.read().await.content_hash.clone();
+
+    let mut overrides: Vec<(i64, bool)> = sqlx::query_as(
+        "SELECT blocklist_id, enabled FROM device_blocklist_overrides WHERE device_id = ? \
+         ORDER BY blocklist_id",
+    )
+    .bind(device_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    overrides.sort();
+
+    let mut custom: Vec<(String, String)> = sqlx::query_as(
+        "SELECT domain, list_type FROM dns_custom_domains WHERE device_id = ? ORDER BY domain",
+    )
+    .bind(device_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    custom.sort();
+
+    let mut hasher = Sha256::new();
+    hasher.update(global_hash.as_bytes());
+    for (id, enabled) in overrides {
+        hasher.update(format!("\nov:{id}:{enabled}").as_bytes());
+    }
+    for (domain, list_type) in custom {
+        hasher.update(format!("\ncd:{list_type}:{domain}").as_bytes());
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// This device's fully-resolved effective blocklist: every feed the global
+/// default has on (minus this device's overrides that turn one off), plus
+/// any feed this device's override turns on even if the global default has
+/// it off, plus global + device-scoped custom block domains, minus global +
+/// device-scoped custom allow domains. Only fetched by the client when
+/// `PolicyResponse.dns_filter_version` changes - see that field's doc
+/// comment - since this can be a large (~100k+ domain) payload.
+pub async fn dns_blocklist(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
+) -> impl IntoResponse {
+    let global_enabled: std::collections::HashMap<i64, bool> =
+        sqlx::query_as::<_, (i64, bool)>("SELECT id, enabled FROM dns_blocklists")
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+    let overrides: std::collections::HashMap<i64, bool> = sqlx::query_as::<_, (i64, bool)>(
+        "SELECT blocklist_id, enabled FROM device_blocklist_overrides WHERE device_id = ?",
+    )
+    .bind(device.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .collect();
+
+    let device_custom = sqlx::query_as::<_, crate::models::DnsCustomDomain>(
+        "SELECT * FROM dns_custom_domains WHERE device_id = ?",
+    )
+    .bind(device.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let device_allow: std::collections::HashSet<String> = device_custom
+        .iter()
+        .filter(|d| d.list_type == "allow")
+        .map(|d| d.domain.to_lowercase())
+        .collect();
+    let device_block: std::collections::HashSet<String> = device_custom
+        .iter()
+        .filter(|d| d.list_type == "block")
+        .map(|d| d.domain.to_lowercase())
+        .collect();
+
+    let compiled = state.dns_compiled.read().await;
+
+    let mut categories: Vec<DnsBlocklistCategory> = compiled
+        .lists
+        .iter()
+        .filter(|list| {
+            let effective = overrides
+                .get(&list.blocklist_id)
+                .copied()
+                .unwrap_or_else(|| {
+                    global_enabled
+                        .get(&list.blocklist_id)
+                        .copied()
+                        .unwrap_or(false)
+                });
+            effective
+        })
+        .map(|list| DnsBlocklistCategory {
+            category: list.category.clone(),
+            domains: list
+                .domains
+                .iter()
+                .filter(|d| !device_allow.contains(*d))
+                .cloned()
+                .collect(),
+        })
+        .collect();
+
+    let custom_block: Vec<String> = compiled
+        .global_custom_block
+        .iter()
+        .chain(device_block.iter())
+        .filter(|d| !device_allow.contains(*d) && !compiled.global_custom_allow.contains(*d))
+        .cloned()
+        .collect();
+    if !custom_block.is_empty() {
+        categories.push(DnsBlocklistCategory {
+            category: "Custom".to_string(),
+            domains: custom_block,
+        });
+    }
+
+    Json(categories).into_response()
+}
+
+/// Ingests a batch of blocked-domain events the device's on-device filter
+/// has queued since its last successful report - see
+/// `PolicyResponse.dns_filter_version`'s doc comment and
+/// migrations/0011_client_side_dns_filtering.sql. Fire-and-forget per row,
+/// same pattern as `status()`'s single `location` insert - a failed insert
+/// here should never fail the whole batch/block the client's sync cycle.
+pub async fn dns_events(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
+    Json(events): Json<Vec<DnsEventReport>>,
+) -> impl IntoResponse {
+    for event in events.into_iter().take(200) {
+        sqlx::query(
+            "INSERT INTO device_dns_events (device_id, domain, category, blocked_at) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(device.id)
+        .bind(&event.domain)
+        .bind(&event.category)
+        .bind(&event.blocked_at)
+        .execute(&state.db)
+        .await
+        .ok();
+    }
+
+    StatusCode::NO_CONTENT
 }
 
 pub async fn status(
