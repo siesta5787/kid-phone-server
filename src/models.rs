@@ -305,6 +305,10 @@ pub struct DnsBlocklistCategory {
 #[derive(Serialize)]
 pub struct TrackedAppUpdate {
     pub id: i64,
+    /// The admin-facing name from the Apps catalog (e.g. "Tailscale") - used client-side for the
+    /// install-progress notification, since [package_name] can no longer be relied on to be
+    /// present or human-meaningful.
+    pub name: String,
     /// Kept for the admin's own reference and for backward compat with
     /// already-installed older client builds that still key their local
     /// install-state tracking off it - no longer load-bearing on the server

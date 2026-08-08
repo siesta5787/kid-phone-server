@@ -444,6 +444,7 @@ pub async fn tracked_app_updates(
             };
             Some(TrackedAppUpdate {
                 id: app.id,
+                name: app.name,
                 package_name: app.package_name,
                 release_tag,
                 download_url: format!("/api/devices/apps/{}/download", app.id),

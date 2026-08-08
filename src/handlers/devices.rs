@@ -445,6 +445,25 @@ pub async fn toggle_tracked_app(
         .execute(&state.db)
         .await
         .ok();
+
+        // Auto-allow: pushing an app to a kiosk-mode device that isn't also on its allowlist is
+        // silently useless until an admin comes back later and checks a second box - reported live
+        // as the exact friction this exists to remove. Only possible when the app has a real
+        // package name on file (optional now - see tracked_apps.rs's create/update handlers);
+        // nothing to add to a package-name-keyed allowlist without one. Deliberately one-directional
+        // - unchecking "install" here does *not* remove the package from the allowlist, since the
+        // app (if already installed) stays on the device and revoking kiosk access to it wasn't
+        // what the admin asked for.
+        if let Ok(Some(app)) =
+            sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
+                .bind(app_id)
+                .fetch_optional(&state.db)
+                .await
+        {
+            if !app.package_name.is_empty() {
+                add_to_allowlist(&state, id, &app.package_name).await;
+            }
+        }
     } else {
         sqlx::query("DELETE FROM device_tracked_apps WHERE device_id = ? AND tracked_app_id = ?")
             .bind(id)
@@ -456,6 +475,43 @@ pub async fn toggle_tracked_app(
 
     let _ = state.command_notify.send(id);
     Redirect::to(&format!("/devices/{id}"))
+}
+
+/// Adds one package to a device's allowlist if it isn't already there. Used by
+/// [toggle_tracked_app] - see its own doc comment for why. `updated_at` is bumped like every other
+/// `device_policy` write, so the "changed since last sync" nudge story stays consistent even though
+/// this isn't going through the normal `update_policy` form save.
+async fn add_to_allowlist(state: &AppState, device_id: i64, package_name: &str) {
+    let current: Option<String> =
+        sqlx::query_scalar("SELECT allowlist_json FROM device_policy WHERE device_id = ?")
+            .bind(device_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+    let mut packages: Vec<String> = current
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
+
+    if packages.iter().any(|p| p == package_name) {
+        return;
+    }
+    packages.push(package_name.to_string());
+
+    let Ok(json) = serde_json::to_string(&packages) else {
+        return;
+    };
+    sqlx::query(
+        "UPDATE device_policy SET allowlist_json = ?, updated_at = datetime('now') \
+         WHERE device_id = ?",
+    )
+    .bind(&json)
+    .bind(device_id)
+    .execute(&state.db)
+    .await
+    .ok();
 }
 
 /// Repeated `allowed_packages` checkbox values can't be collected into a
@@ -479,7 +535,51 @@ pub async fn update_policy(
     }
     let field = |k: &str| fields.get(k).cloned().unwrap_or_default();
 
-    let allowlist_json = serde_json::to_string(&allowed_packages).ok();
+    // The "Allowed apps" checkboxes on device_detail.html only ever render one row per package the
+    // device has actually reported installed (see view_device's `apps`) - so a package that's on
+    // the allowlist but not yet installed (e.g. just auto-added by toggle_tracked_app's
+    // add_to_allowlist, ahead of the device actually installing it) was never an option on this
+    // page and can't have been in the submitted `allowed_packages` list either way. Naively trusting
+    // that submitted list as the complete new allowlist would silently drop it - any unrelated
+    // save (schedule, WiFi mode, whatever) in the window before the device installs and reports
+    // back would erase the pre-authorization. Preserve any currently-allowed package that wasn't a
+    // rendered option this time; only packages that *were* real checkboxes here reflect the admin's
+    // actual choice to keep or drop them.
+    let installed_packages: std::collections::HashSet<String> = {
+        let json: Option<String> = sqlx::query_scalar(
+            "SELECT installed_apps_json FROM device_status WHERE device_id = ? \
+             ORDER BY reported_at DESC LIMIT 1",
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+        let installed: Vec<InstalledApp> = json
+            .as_deref()
+            .and_then(|j| serde_json::from_str(j).ok())
+            .unwrap_or_default();
+        installed.into_iter().map(|a| a.package_name).collect()
+    };
+    let current_allowlist: Vec<String> = {
+        let json: Option<String> =
+            sqlx::query_scalar("SELECT allowlist_json FROM device_policy WHERE device_id = ?")
+                .bind(id)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten();
+        json.as_deref()
+            .and_then(|j| serde_json::from_str(j).ok())
+            .unwrap_or_default()
+    };
+    let mut final_allowed = allowed_packages.clone();
+    for pkg in current_allowlist {
+        if !installed_packages.contains(&pkg) && !final_allowed.contains(&pkg) {
+            final_allowed.push(pkg);
+        }
+    }
+    let allowlist_json = serde_json::to_string(&final_allowed).ok();
 
     // Home, status bar info, and recents don't let a kid reach anything outside the pinned/
     // allowed app set - Home just re-navigates within it, recents only lists apps already in it,
