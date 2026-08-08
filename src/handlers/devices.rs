@@ -184,11 +184,20 @@ pub async fn create_device(
     .await
     .expect("failed to create device");
 
-    sqlx::query("INSERT INTO device_policy (device_id) VALUES (?)")
-        .bind(id)
-        .execute(&state.db)
-        .await
-        .ok();
+    // Kiosk mode on, with the full always-on feature set, is the default for every newly
+    // enrolled device now - previously every new device started wide open, requiring an admin to
+    // remember to turn kiosk mode on (and, before that got simplified too, separately check the
+    // notifications/power-button boxes) every single time. Still just a starting point, not
+    // mandatory: the "Restrict this phone to only the apps allowed below" checkbox on the device's
+    // own page is untouched, so unchecking it after enrollment still fully disables kiosk mode.
+    sqlx::query(
+        "INSERT INTO device_policy (device_id, kiosk_desired, lock_task_features) VALUES (?, 1, ?)",
+    )
+    .bind(id)
+    .bind(DEFAULT_LOCK_TASK_FEATURES)
+    .execute(&state.db)
+    .await
+    .ok();
 
     Redirect::to(&format!("/devices/{id}"))
 }
@@ -245,6 +254,17 @@ const LOCK_FEATURE_OVERVIEW: i64 = 8;
 const LOCK_FEATURE_GLOBAL_ACTIONS: i64 = 16;
 const LOCK_FEATURE_KEYGUARD: i64 = 32;
 
+/// None of the six are admin-configurable anymore - see `update_policy`'s doc comment on why each
+/// one is always on whenever kiosk mode is - so this is just the one value `lock_task_features`
+/// ever takes for a kiosk-mode device. Used both there and in `create_device`, so a newly enrolled
+/// device starts with the exact same features a save from the device detail page would produce.
+const DEFAULT_LOCK_TASK_FEATURES: i64 = LOCK_FEATURE_SYSTEM_INFO
+    | LOCK_FEATURE_HOME
+    | LOCK_FEATURE_OVERVIEW
+    | LOCK_FEATURE_KEYGUARD
+    | LOCK_FEATURE_NOTIFICATIONS
+    | LOCK_FEATURE_GLOBAL_ACTIONS;
+
 /// Bits for `quick_controls_mask` - which switches show up on the launcher's
 /// swipe-left-from-home "Quick Controls" screen (see kids-launcher-mdm's
 /// `ui/quickcontrols/QuickControlsActivity`), the kid-facing replacement for
@@ -277,8 +297,6 @@ struct DeviceDetailTemplate {
     bedtime_start: String,
     bedtime_end: String,
     kiosk_desired: bool,
-    lock_feature_notifications: bool,
-    lock_feature_global_actions: bool,
     wifi_mode: String,
     bluetooth_mode: String,
     pin_configured: bool,
@@ -389,7 +407,6 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         })
         .collect();
 
-    let lock_task_features = policy.lock_task_features.unwrap_or(0);
     let offline_override_used = latest_status
         .as_ref()
         .map(|s| s.offline_override_used)
@@ -405,8 +422,6 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             bedtime_start: minutes_to_time_input(policy.bedtime_start_minutes),
             bedtime_end: minutes_to_time_input(policy.bedtime_end_minutes),
             kiosk_desired: policy.kiosk_desired,
-            lock_feature_notifications: lock_task_features & LOCK_FEATURE_NOTIFICATIONS != 0,
-            lock_feature_global_actions: lock_task_features & LOCK_FEATURE_GLOBAL_ACTIONS != 0,
             wifi_mode: policy.wifi_mode,
             bluetooth_mode: policy.bluetooth_mode,
             pin_configured: policy.override_pin_hash.is_some(),
@@ -683,10 +698,14 @@ pub async fn update_policy(
     }
     let allowlist_json = serde_json::to_string(&final_allowed).ok();
 
-    // Home, status bar info, and recents don't let a kid reach anything outside the pinned/
-    // allowed app set - Home just re-navigates within it, recents only lists apps already in it,
-    // and status bar info is read-only. They're not real restrictions, just navigation
-    // convenience, so they're always on rather than admin-configurable (see device_detail.html).
+    // Home, status bar info, recents, notifications, and the power button menu don't let a kid
+    // reach anything outside the pinned/allowed app set - Home just re-navigates within it,
+    // recents only lists apps already in it, status bar info is read-only, notifications can only
+    // come from allowed apps, and the power button menu just offers power off/restart/etc, not
+    // app access. None of these are real restrictions, just navigation/system convenience, so
+    // they're always on rather than admin-configurable - previously notifications and the power
+    // button menu had their own checkboxes, but there was never a real reason for a parent to want
+    // either one off while kiosk mode is on, so those were removed (see device_detail.html).
     //
     // Keyguard is also forced on unconditionally, for a very different reason: a real device got
     // stuck at boot after GrapheneOS's own auto-reboot-after-inactivity feature re-locked storage
@@ -700,16 +719,7 @@ pub async fn update_policy(
     // direct-boot-aware) keyguard can always come up after any reboot, regardless of kiosk
     // config. The real tradeoff: every kiosk-mode device now also requires a PIN to resume from
     // sleep, not just after a reboot - Android doesn't expose those as separate bits.
-    let mut lock_task_features: i64 = LOCK_FEATURE_SYSTEM_INFO
-        | LOCK_FEATURE_HOME
-        | LOCK_FEATURE_OVERVIEW
-        | LOCK_FEATURE_KEYGUARD;
-    if fields.contains_key("lock_feature_notifications") {
-        lock_task_features |= LOCK_FEATURE_NOTIFICATIONS;
-    }
-    if fields.contains_key("lock_feature_global_actions") {
-        lock_task_features |= LOCK_FEATURE_GLOBAL_ACTIONS;
-    }
+    let lock_task_features: i64 = DEFAULT_LOCK_TASK_FEATURES;
 
     let wifi_mode = normalize_radio_mode(&field("wifi_mode"));
     let bluetooth_mode = normalize_radio_mode(&field("bluetooth_mode"));
