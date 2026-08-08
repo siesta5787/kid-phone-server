@@ -220,15 +220,18 @@ struct AppCheckbox {
 
 /// One row per app from the global Apps list (`tracked_apps`), scoped to whether *this* device
 /// gets it pushed - see migrations/0013_device_tracked_apps.sql. The launcher's own row is always
-/// `checked` and rendered disabled in device_detail.html (also enforced server-side in
-/// `update_policy`, which never lets a submitted `selected_apps` list affect it) - there's no
-/// real-world case for a kid's phone not running the app that enforces every other restriction on
-/// it.
+/// `checked` and rendered disabled in device_detail.html (also enforced server-side - see
+/// `toggle_tracked_app`'s own doc comment) - there's no real-world case for a kid's phone not
+/// running the app that enforces every other restriction on it. `has_release` is surfaced so
+/// device_detail.html can flag an app that's checked but has nothing to actually push yet (no
+/// GitHub release synced, or a manual-upload app nobody's uploaded a build to yet) - selecting it
+/// used to silently do nothing until a release showed up, with no indication why.
 struct TrackedAppCheckbox {
     id: i64,
     name: String,
     checked: bool,
     is_launcher: bool,
+    has_release: bool,
 }
 
 /// The six parent-facing LockTask features, decoded from/encoded into the
@@ -382,6 +385,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             id: a.id,
             name: a.name,
             is_launcher: a.is_launcher,
+            has_release: a.latest_release_tag.is_some(),
         })
         .collect();
 

@@ -53,7 +53,7 @@
             <form method="post" action="/devices/{{ device.id }}/apps/{{ app.id }}/toggle">
                 <label class="checkbox-row">
                     <input type="checkbox" name="selected" {% if app.checked %}checked{% endif %} onchange="this.form.submit()">
-                    {{ app.name }}
+                    {{ app.name }}{% if !app.has_release %} <span class="subtitle">(no release yet - won't install until one's added)</span>{% endif %}
                 </label>
             </form>
             {% endif %}
