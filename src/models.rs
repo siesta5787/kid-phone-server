@@ -236,6 +236,12 @@ pub struct PolicyResponse {
     /// allowed (non-blocked) queries to - "cloudflare" or "quad9", mirrors
     /// `dns_filter_settings.upstream`.
     pub dns_upstream_provider: String,
+    /// Packages the device should silently uninstall - see migrations/0014_device_pending_uninstalls.sql
+    /// and `handlers::devices::toggle_tracked_app`. Populated fresh on every fetch (not a one-shot
+    /// queue like `pending_command`); the row backing an entry here is only cleared once a status
+    /// report confirms the package is actually gone, so the instruction survives being missed by
+    /// any single sync cycle.
+    pub packages_to_uninstall: Vec<String>,
 }
 
 /// The oldest undelivered [DeviceCommand] for this device, if any - `policy()`

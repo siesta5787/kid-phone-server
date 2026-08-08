@@ -435,11 +435,26 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
 /// file's own quick-toggles elsewhere) already auto-saves on change. The launcher's own row never
 /// reaches this handler - its checkbox in the template is `disabled`, and a disabled control can't
 /// be interacted with to submit a request in the first place.
+///
+/// Checking and unchecking are symmetric now, both keyed on the tracked app's package name (a
+/// no-op either direction without one on file - see tracked_apps.rs's create/update handlers):
+/// checking adds it to the allowlist so a kiosk-mode device doesn't have it pushed-but-invisible
+/// until a second manual step; unchecking removes it from the allowlist *and* queues a silent
+/// uninstall (`device_pending_uninstalls`) if the device currently reports it installed. Confirmed
+/// live this is what an admin actually wants from "uncheck this app" - not "stop pushing updates
+/// but leave it on the phone."
 pub async fn toggle_tracked_app(
     State(state): State<AppState>,
     Path((id, app_id)): Path<(i64, i64)>,
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
+    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
+        .bind(app_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
     if form.contains_key("selected") {
         sqlx::query(
             "INSERT OR IGNORE INTO device_tracked_apps (device_id, tracked_app_id) VALUES (?, ?)",
@@ -450,20 +465,7 @@ pub async fn toggle_tracked_app(
         .await
         .ok();
 
-        // Auto-allow: pushing an app to a kiosk-mode device that isn't also on its allowlist is
-        // silently useless until an admin comes back later and checks a second box - reported live
-        // as the exact friction this exists to remove. Only possible when the app has a real
-        // package name on file (optional now - see tracked_apps.rs's create/update handlers);
-        // nothing to add to a package-name-keyed allowlist without one. Deliberately one-directional
-        // - unchecking "install" here does *not* remove the package from the allowlist, since the
-        // app (if already installed) stays on the device and revoking kiosk access to it wasn't
-        // what the admin asked for.
-        if let Ok(Some(app)) =
-            sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
-                .bind(app_id)
-                .fetch_optional(&state.db)
-                .await
-        {
+        if let Some(app) = &app {
             if !app.package_name.is_empty() {
                 add_to_allowlist(&state, id, &app.package_name).await;
             }
@@ -475,10 +477,47 @@ pub async fn toggle_tracked_app(
             .execute(&state.db)
             .await
             .ok();
+
+        if let Some(app) = &app {
+            if !app.package_name.is_empty() {
+                remove_from_allowlist(&state, id, &app.package_name).await;
+                if is_installed_on_device(&state, id, &app.package_name).await {
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO device_pending_uninstalls (device_id, package_name) \
+                         VALUES (?, ?)",
+                    )
+                    .bind(id)
+                    .bind(&app.package_name)
+                    .execute(&state.db)
+                    .await
+                    .ok();
+                }
+            }
+        }
     }
 
     let _ = state.command_notify.send(id);
     Redirect::to(&format!("/devices/{id}"))
+}
+
+/// Whether the device's most recent status report lists this package as installed - gates queuing
+/// an uninstall in [toggle_tracked_app], since there's nothing to uninstall otherwise (and no harm
+/// either way; the client silently no-ops uninstalling an already-absent package).
+async fn is_installed_on_device(state: &AppState, device_id: i64, package_name: &str) -> bool {
+    let json: Option<String> = sqlx::query_scalar(
+        "SELECT installed_apps_json FROM device_status WHERE device_id = ? \
+         ORDER BY reported_at DESC LIMIT 1",
+    )
+    .bind(device_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let installed: Vec<InstalledApp> = json
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
+    installed.iter().any(|a| a.package_name == package_name)
 }
 
 /// Adds one package to a device's allowlist if it isn't already there. Used by
@@ -503,6 +542,42 @@ async fn add_to_allowlist(state: &AppState, device_id: i64, package_name: &str) 
         return;
     }
     packages.push(package_name.to_string());
+
+    let Ok(json) = serde_json::to_string(&packages) else {
+        return;
+    };
+    sqlx::query(
+        "UPDATE device_policy SET allowlist_json = ?, updated_at = datetime('now') \
+         WHERE device_id = ?",
+    )
+    .bind(&json)
+    .bind(device_id)
+    .execute(&state.db)
+    .await
+    .ok();
+}
+
+/// Removes one package from a device's allowlist if present - the uncheck-side counterpart to
+/// [add_to_allowlist], used by [toggle_tracked_app].
+async fn remove_from_allowlist(state: &AppState, device_id: i64, package_name: &str) {
+    let current: Option<String> =
+        sqlx::query_scalar("SELECT allowlist_json FROM device_policy WHERE device_id = ?")
+            .bind(device_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+    let mut packages: Vec<String> = current
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
+
+    let original_len = packages.len();
+    packages.retain(|p| p != package_name);
+    if packages.len() == original_len {
+        return;
+    }
 
     let Ok(json) = serde_json::to_string(&packages) else {
         return;

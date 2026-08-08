@@ -125,6 +125,14 @@ pub async fn policy(
 
     let dns_filter_version = compute_dns_filter_version(&state, device.id).await;
 
+    let packages_to_uninstall: Vec<String> = sqlx::query_scalar(
+        "SELECT package_name FROM device_pending_uninstalls WHERE device_id = ?",
+    )
+    .bind(device.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
     Json(PolicyResponse {
         allowlist,
         weekday_start_minutes: policy.weekday_start_minutes,
@@ -144,6 +152,7 @@ pub async fn policy(
         vpn_filter_enabled: policy.vpn_filter_enabled,
         dns_filter_version,
         dns_upstream_provider,
+        packages_to_uninstall,
     })
     .into_response()
 }
@@ -339,6 +348,34 @@ pub async fn status(
         .execute(&state.db)
         .await
         .ok();
+
+    // Self-cleans device_pending_uninstalls - once a real installed-apps report no longer lists a
+    // package that was queued for uninstall, it's confirmed gone, so there's nothing left to keep
+    // asking the device to do. See migrations/0014_device_pending_uninstalls.sql's doc comment for
+    // why this table exists instead of reusing the device_commands queue.
+    if let Some(installed) = &report.installed_apps {
+        let installed_names: std::collections::HashSet<&str> =
+            installed.iter().map(|a| a.package_name.as_str()).collect();
+        let pending: Vec<String> = sqlx::query_scalar(
+            "SELECT package_name FROM device_pending_uninstalls WHERE device_id = ?",
+        )
+        .bind(device.id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+        for package_name in pending {
+            if !installed_names.contains(package_name.as_str()) {
+                sqlx::query(
+                    "DELETE FROM device_pending_uninstalls WHERE device_id = ? AND package_name = ?",
+                )
+                .bind(device.id)
+                .bind(&package_name)
+                .execute(&state.db)
+                .await
+                .ok();
+            }
+        }
+    }
 
     // Attached on every regular heartbeat when the device has a location
     // reading available, not just after a `locate` command - see
