@@ -266,8 +266,7 @@ struct DeviceDetailTemplate {
     bluetooth_mode: String,
     pin_configured: bool,
     offline_override_used: bool,
-    require_tailscale: bool,
-    tailscale_exit_node_id: String,
+    vpn_filter_enabled: bool,
     quick_control_wifi: bool,
     quick_control_bluetooth: bool,
     quick_control_brightness: bool,
@@ -312,6 +311,9 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
                 device_id: id,
                 wifi_mode: "open".to_string(),
                 bluetooth_mode: "open".to_string(),
+                // See the matching comment in device_api::policy - bool::default() is false,
+                // but a never-configured device must still show/default to filtering on.
+                vpn_filter_enabled: true,
                 ..Default::default()
             });
 
@@ -369,8 +371,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             bluetooth_mode: policy.bluetooth_mode,
             pin_configured: policy.override_pin_hash.is_some(),
             offline_override_used,
-            require_tailscale: policy.require_tailscale,
-            tailscale_exit_node_id: policy.tailscale_exit_node_id.unwrap_or_default(),
+            vpn_filter_enabled: policy.vpn_filter_enabled,
             quick_control_wifi: policy.quick_controls_mask & QUICK_CONTROL_WIFI != 0,
             quick_control_bluetooth: policy.quick_controls_mask & QUICK_CONTROL_BLUETOOTH != 0,
             quick_control_brightness: policy.quick_controls_mask & QUICK_CONTROL_BRIGHTNESS != 0,
@@ -449,16 +450,7 @@ pub async fn update_policy(
         quick_controls_mask |= QUICK_CONTROL_BRIGHTNESS;
     }
 
-    let require_tailscale = fields.contains_key("require_tailscale");
-    let tailscale_exit_node_id = {
-        let value = field("tailscale_exit_node_id");
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    };
+    let vpn_filter_enabled = fields.contains_key("vpn_filter_enabled");
 
     // The PIN fields are optional on every save (this form saves everything
     // together) - leave the stored hash/salt untouched unless the admin
@@ -509,8 +501,7 @@ pub async fn update_policy(
          bedtime_start_minutes = ?, bedtime_end_minutes = ?, kiosk_desired = ?, \
          lock_task_features = ?, wifi_mode = ?, bluetooth_mode = ?, \
          override_pin_hash = ?, override_pin_salt = ?, \
-         require_tailscale = ?, tailscale_exit_node_id = ?, \
-         quick_controls_mask = ?, \
+         quick_controls_mask = ?, vpn_filter_enabled = ?, \
          updated_at = datetime('now') WHERE device_id = ?",
     )
     .bind(&allowlist_json)
@@ -526,9 +517,8 @@ pub async fn update_policy(
     .bind(&bluetooth_mode)
     .bind(&override_pin_hash)
     .bind(&override_pin_salt)
-    .bind(require_tailscale)
-    .bind(&tailscale_exit_node_id)
     .bind(quick_controls_mask)
+    .bind(vpn_filter_enabled)
     .bind(id)
     .execute(&state.db)
     .await

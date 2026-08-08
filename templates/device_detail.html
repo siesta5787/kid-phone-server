@@ -133,14 +133,12 @@
             Screen brightness
         </label>
 
-        <h2>VPN (Tailscale)</h2>
-        <p class="subtitle">Requires the Tailscale app to be installed and allowlisted on the phone. Enforced at the app level (the kid can't disconnect Tailscale from within its own app once this is on) always. The stronger OS-level enforcement (Android's always-on VPN lockdown, which also covers Tailscale's own Quick Settings tile) only turns on once an exit node is set below - <strong>without an exit node, Tailscale can't route general internet traffic, so OS-level lockdown would just cut off the phone's internet entirely</strong> (this is Tailscale's own documented behavior, not something we can fix on our end).</p>
+        <h2>Ad/content filtering (VPN)</h2>
+        <p class="subtitle">The launcher runs its own on-device VPN to filter ads/content locally (see the <a href="/dns">DNS/Filters</a> tab for blocklists and what's been blocked). Turning this off disables that filtering on this device entirely - the device still syncs normally, it just stops blocking anything. There's no on-device way for a kid to turn this off themselves.</p>
         <label class="checkbox-row">
-            <input type="checkbox" name="require_tailscale" value="on" {% if require_tailscale %}checked{% endif %}>
-            Require Tailscale to stay connected
+            <input type="checkbox" name="vpn_filter_enabled" value="on" {% if vpn_filter_enabled %}checked{% endif %}>
+            Enable ad/content filtering on this device
         </label>
-        <label for="tailscale_exit_node_id">Exit node ID (required for the stronger OS-level enforcement above - leave blank until your exit node is set up)</label>
-        <input type="text" id="tailscale_exit_node_id" name="tailscale_exit_node_id" value="{{ tailscale_exit_node_id }}" autocomplete="off">
 
         <h2>Offline override PIN</h2>
         <p class="subtitle">A failsafe for when the phone can't reach the server at all (e.g. WiFi is disabled above and there's no other connectivity). Entering this PIN directly on the phone temporarily lifts every restriction; it reasserts automatically the moment the phone can sync again.</p>

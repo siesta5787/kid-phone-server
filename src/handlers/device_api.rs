@@ -74,6 +74,10 @@ pub async fn policy(
                 device_id: device.id,
                 wifi_mode: "open".to_string(),
                 bluetooth_mode: "open".to_string(),
+                // bool::default() is false - a brand new device (no device_policy row saved
+                // yet) must still default to filtering ON, matching the DB column's own
+                // DEFAULT 1, or a device's very first policy fetch would report filtering off.
+                vpn_filter_enabled: true,
                 ..Default::default()
             });
 
@@ -135,10 +139,9 @@ pub async fn policy(
         bluetooth_mode: policy.bluetooth_mode,
         override_pin_hash: policy.override_pin_hash,
         override_pin_salt: policy.override_pin_salt,
-        require_tailscale: policy.require_tailscale,
-        tailscale_exit_node_id: policy.tailscale_exit_node_id,
         quick_controls_mask: policy.quick_controls_mask,
         pending_command,
+        vpn_filter_enabled: policy.vpn_filter_enabled,
         dns_filter_version,
         dns_upstream_provider,
     })

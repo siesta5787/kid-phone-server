@@ -10,7 +10,6 @@ use axum::routing::{get, post};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous};
 use std::str::FromStr;
-use std::sync::Arc;
 use tower_http::services::ServeDir;
 use tower_sessions::cookie::time::Duration as CookieDuration;
 use tower_sessions::session_store::ExpiredDeletion;
@@ -20,12 +19,10 @@ use tower_sessions_sqlx_store::SqliteStore;
 #[derive(Clone)]
 pub struct AppState {
     pub db: SqlitePool,
-    pub dns_state: dns_engine::SharedDnsState,
-    pub dns_stats: Arc<dns_engine::Stats>,
-    /// The client-side-filtering replacement for `dns_state` - see
-    /// `dns_engine::CompiledBlocklist`'s doc comment. `dns_state`/`dns_stats`
-    /// go away once Phase E of the on-device-filtering migration retires the
-    /// live hickory DNS server; this is what replaces them.
+    /// The compiled blocklist every device's on-device filter resolves its own effective list
+    /// from - see `dns_engine::CompiledBlocklist`'s doc comment. This server no longer runs a
+    /// live DNS server itself (Phase E of the on-device-filtering migration retired it, see
+    /// CLAUDE.md) - filtering happens entirely on-device now.
     pub dns_compiled: dns_engine::SharedCompiledBlocklist,
     /// Broadcasts a device id the instant a command is queued for it (see
     /// `handlers::locate::queue_command`) - lets `handlers::device_api::commands_stream`'s SSE
@@ -108,12 +105,9 @@ async fn main() {
     let (command_notify, _) = tokio::sync::broadcast::channel(64);
     let state = AppState {
         db,
-        dns_state: dns_engine::empty_state(),
-        dns_stats: std::sync::Arc::new(dns_engine::Stats::default()),
         dns_compiled: dns_engine::empty_compiled_blocklist(),
         command_notify,
     };
-    dns_engine::rebuild(&state, &state.dns_state).await;
     dns_engine::compile_blocklist(&state, &state.dns_compiled).await;
 
     // Reachable without any session at all. /sw.js lives here too - a
@@ -213,7 +207,6 @@ async fn main() {
             post(handlers::tracked_apps::delete_tracked_app),
         )
         .route("/dns", get(handlers::dns_filter::show_dns_filter))
-        .route("/dns/toggle", post(handlers::dns_filter::toggle_enabled))
         .route("/dns/upstream", post(handlers::dns_filter::set_upstream))
         .route(
             "/dns/blocklists/new",
@@ -358,10 +351,6 @@ async fn main() {
     ));
     tokio::task::spawn(handlers::tracked_apps::run_scheduled_tracked_app_sync(
         state.clone(),
-    ));
-    tokio::task::spawn(dns_engine::run(
-        state.dns_state.clone(),
-        state.dns_stats.clone(),
     ));
     tokio::task::spawn(handlers::dns_filter::run_blocklist_refresh(state.clone()));
     tokio::task::spawn(handlers::dns_filter::run_dns_event_pruning(state.clone()));

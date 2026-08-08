@@ -9,19 +9,7 @@
     <div class="page-header">
         <h1>DNS/Filters</h1>
     </div>
-    <p class="subtitle">Blocks ads, trackers, and other content network-wide for whichever device uses this Pi as its Tailscale exit node - built in, no separate app to install. See the "Connect your kid's device" card below for the one-time setup.</p>
-
-    <div class="card">
-        <form method="post" action="/dns/toggle">
-            <label class="checkbox-row">
-                <input type="checkbox" name="enabled" value="on" {% if settings.enabled %}checked{% endif %} onchange="this.form.submit()">
-                Enable DNS filtering
-            </label>
-        </form>
-        {% if settings.enabled %}
-        <p class="subtitle">{{ total_queries }} queries handled, {{ blocked_queries }} blocked, since {{ running_since }}.</p>
-        {% endif %}
-    </div>
+    <p class="subtitle">Blocking now happens on-device (each kid's launcher runs its own local filter) - this page manages the shared blocklists/custom domains it uses. Turn filtering on/off for a specific kid from their device page. <a href="/dns/log">See what's been blocked &rarr;</a></p>
 
     <div class="card">
         <h2>Upstream resolver</h2>
@@ -181,21 +169,6 @@
         {% endif %}
     </div>
 
-    <div class="card">
-        <h2>Connect your kid's device</h2>
-        <ol>
-            <li>In the <a href="https://login.tailscale.com/admin/machines">Tailscale admin console</a>, find this Pi, open its route settings, and turn on "Use as exit node".</li>
-            <li>
-                {% if let Some(ip) = tailscale_ip %}
-                On the kid's device, set this Pi as its exit node - this Pi's tailnet IP is <strong>{{ ip }}</strong>.
-                {% else %}
-                On the kid's device, set this Pi as its exit node (its tailnet IP will show here once Tailscale is running on the Pi).
-                {% endif %}
-            </li>
-            <li>Turn on "Require Tailscale to stay connected" on that device's page, with this as its exit node, so it can't be bypassed.</li>
-        </ol>
-        <p class="subtitle">Other devices on your tailnet are unaffected unless they also choose this Pi as their exit node.</p>
-    </div>
 </main>
 </body>
 </html>

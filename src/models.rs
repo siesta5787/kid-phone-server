@@ -39,9 +39,8 @@ pub struct DevicePolicy {
     pub bluetooth_mode: String,
     pub override_pin_hash: Option<String>,
     pub override_pin_salt: Option<String>,
-    pub require_tailscale: bool,
-    pub tailscale_exit_node_id: Option<String>,
     pub quick_controls_mask: i64,
+    pub vpn_filter_enabled: bool,
 }
 
 #[derive(sqlx::FromRow, Clone)]
@@ -99,7 +98,6 @@ pub struct TrackedApp {
 #[derive(sqlx::FromRow, Clone)]
 pub struct DnsFilterSettings {
     pub id: i64,
-    pub enabled: bool,
     pub upstream: String,
     pub updated_at: String,
 }
@@ -216,10 +214,13 @@ pub struct PolicyResponse {
     pub bluetooth_mode: String,
     pub override_pin_hash: Option<String>,
     pub override_pin_salt: Option<String>,
-    pub require_tailscale: bool,
-    pub tailscale_exit_node_id: Option<String>,
     pub quick_controls_mask: i64,
     pub pending_command: Option<PendingCommand>,
+    /// Per-device on/off for the on-device DNS filter's VPN piece
+    /// (KidVpnService) - see `AppEnforcer.applyVpnRestrictions` on the
+    /// client. Defaults true; a parent can turn it off per kid from the
+    /// device detail page.
+    pub vpn_filter_enabled: bool,
     /// Opaque token summarizing this device's fully-resolved blocklist
     /// (global feeds + this device's overrides + global/device-scoped custom
     /// domains). The client compares this against its last-fetched value and
