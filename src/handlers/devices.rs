@@ -542,9 +542,18 @@ pub async fn update_policy(
     // page and can't have been in the submitted `allowed_packages` list either way. Naively trusting
     // that submitted list as the complete new allowlist would silently drop it - any unrelated
     // save (schedule, WiFi mode, whatever) in the window before the device installs and reports
-    // back would erase the pre-authorization. Preserve any currently-allowed package that wasn't a
-    // rendered option this time; only packages that *were* real checkboxes here reflect the admin's
-    // actual choice to keep or drop them.
+    // back would erase the pre-authorization.
+    //
+    // Only preserve entries that are *actually* pending like that - a package name belonging to a
+    // tracked app still selected for this device (`device_tracked_apps`) that the device hasn't
+    // yet reported as installed. Preserving every not-rendered package unconditionally was tried
+    // first and was wrong: it also protects a package that WAS installed and allowed, then got
+    // uninstalled (by the kid, or any other way) - that package's checkbox simply stops rendering,
+    // so it could never be unchecked again either, and would silently regain kiosk access if ever
+    // reinstalled without the admin re-approving it. Restricting the preserve-list to genuinely
+    // pending tracked-app installs keeps the original self-cleaning behavior for everything else -
+    // an allowed-but-no-longer-installed package still falls out of the allowlist on the next save,
+    // same as before this whole pending-preserve mechanism existed.
     let installed_packages: std::collections::HashSet<String> = {
         let json: Option<String> = sqlx::query_scalar(
             "SELECT installed_apps_json FROM device_status WHERE device_id = ? \
@@ -573,9 +582,23 @@ pub async fn update_policy(
             .and_then(|j| serde_json::from_str(j).ok())
             .unwrap_or_default()
     };
+    let pending_tracked_packages: std::collections::HashSet<String> = sqlx::query_scalar(
+        "SELECT ta.package_name FROM tracked_apps ta \
+         JOIN device_tracked_apps dta ON dta.tracked_app_id = ta.id \
+         WHERE dta.device_id = ? AND ta.package_name != ''",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .collect();
     let mut final_allowed = allowed_packages.clone();
     for pkg in current_allowlist {
-        if !installed_packages.contains(&pkg) && !final_allowed.contains(&pkg) {
+        if !installed_packages.contains(&pkg)
+            && !final_allowed.contains(&pkg)
+            && pending_tracked_packages.contains(&pkg)
+        {
             final_allowed.push(pkg);
         }
     }
