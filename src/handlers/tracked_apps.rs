@@ -223,6 +223,34 @@ pub async fn new_tracked_app_form() -> impl IntoResponse {
     )
 }
 
+/// Accepts a plain "owner/repo" string, or a pasted GitHub URL in any of its common forms - full
+/// URL, with or without protocol/www, pointing at the repo root or its Releases page, with or
+/// without a trailing slash or ".git" - and normalizes all of them down to "owner/repo" (what
+/// `fetch_latest_release` actually needs to build the API URL). Confirmed live this needed to be
+/// forgiving: an admin copying a URL out of the browser address bar naturally includes
+/// "https://github.com/" and is often sitting on the repo's "/releases" page specifically, and a
+/// strict "owner/repo"-only parser rejected all of that with no useful error.
+fn normalize_github_repo(input: &str) -> String {
+    let mut s = input.trim();
+    for prefix in ["https://", "http://"] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest;
+        }
+    }
+    for host in ["www.github.com/", "github.com/"] {
+        if let Some(rest) = s.strip_prefix(host) {
+            s = rest;
+        }
+    }
+    let parts: Vec<&str> = s.split('/').filter(|p| !p.is_empty()).collect();
+    match (parts.first(), parts.get(1)) {
+        (Some(owner), Some(repo)) => {
+            format!("{owner}/{}", repo.strip_suffix(".git").unwrap_or(repo))
+        }
+        _ => s.trim_end_matches('/').to_string(),
+    }
+}
+
 pub async fn create_tracked_app(
     State(state): State<AppState>,
     Extension(_admin): Extension<CurrentAdmin>,
@@ -236,7 +264,7 @@ pub async fn create_tracked_app(
     };
 
     let github_repo = if source_type == "github" {
-        field("github_repo").trim().to_string()
+        normalize_github_repo(field("github_repo").trim())
     } else {
         String::new()
     };
@@ -414,6 +442,77 @@ pub async fn upload_tracked_app_release(
     .ok();
 
     render_detail(&state, id, None).await
+}
+
+/// Lets an admin fix any of a tracked app's identifying details after creation - there was
+/// previously no way to do this short of deleting and re-adding the row (losing its cached
+/// release/check history). `source_type` itself isn't editable here - switching between
+/// GitHub-tracked and manually-uploaded changes the whole update-fetching model, not just a field.
+pub async fn update_tracked_app(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Form(fields): Form<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    let Some(app) = app else {
+        return Redirect::to("/apps");
+    };
+
+    let field = |k: &str| fields.get(k).cloned().unwrap_or_default();
+    let name = field("name").trim().to_string();
+    let package_name = field("package_name").trim().to_string();
+
+    let (github_repo, asset_pattern) = if app.source_type == "github" {
+        let repo = normalize_github_repo(field("github_repo").trim());
+        let pattern = field("asset_pattern").trim().to_string();
+        (repo, (!pattern.is_empty()).then_some(pattern))
+    } else {
+        (app.github_repo.clone(), app.asset_pattern.clone())
+    };
+
+    sqlx::query(
+        "UPDATE tracked_apps SET name = ?, package_name = ?, github_repo = ?, asset_pattern = ? \
+         WHERE id = ?",
+    )
+    .bind(&name)
+    .bind(&package_name)
+    .bind(&github_repo)
+    .bind(&asset_pattern)
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .ok();
+
+    Redirect::to(&format!("/apps/tracked/{id}"))
+}
+
+/// Explicit admin-facing way to mark/unmark the one row that is the launcher itself - see
+/// migrations/0013_device_tracked_apps.sql's doc comment for what this flag does. Exists because
+/// the migration's one-time best-effort `UPDATE ... WHERE package_name = 'com.kidslauncher.mdm'`
+/// missed the real row on a live install whose actual package name was the debug-suffixed
+/// `com.kidslauncher.mdm.debug` (every build shipped so far has been the debug variant - see
+/// kids-launcher-mdm's `app/build.gradle.kts`) - a plain heuristic match on package name is too
+/// fragile to be the only way to set this, so there needed to be a direct way to fix it without a
+/// new migration or shell access to the Pi.
+pub async fn set_is_launcher(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let is_launcher = form.contains_key("is_launcher");
+    sqlx::query("UPDATE tracked_apps SET is_launcher = ? WHERE id = ?")
+        .bind(is_launcher)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    Redirect::to(&format!("/apps/tracked/{id}"))
 }
 
 pub async fn set_enabled(

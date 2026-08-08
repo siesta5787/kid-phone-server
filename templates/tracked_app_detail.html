@@ -19,10 +19,29 @@
     {% endif %}
 
     <div class="card">
+        <h2>Details</h2>
+        <form method="post" action="/apps/tracked/{{ app.id }}/edit">
+            <label for="name">Name</label>
+            <input type="text" id="name" name="name" value="{{ app.name }}" required>
+
+            <label for="package_name">Android package name (optional)</label>
+            <input type="text" id="package_name" name="package_name" value="{{ app.package_name }}" placeholder="e.g. com.tailscale.ipn">
+
+            {% if app.source_type == "github" %}
+            <label for="github_repo">GitHub repo</label>
+            <input type="text" id="github_repo" name="github_repo" value="{{ app.github_repo }}" placeholder="e.g. tailscale/tailscale-android">
+            <p class="hint">Paste the repo URL, its Releases page, or just "owner/repo" - any of those work.</p>
+
+            <label for="asset_pattern">Asset filename filter (optional)</label>
+            <input type="text" id="asset_pattern" name="asset_pattern" value="{% if let Some(p) = app.asset_pattern %}{{ p }}{% endif %}" placeholder="Leave blank to use the first .apk found">
+            {% endif %}
+
+            <button type="submit">Save</button>
+        </form>
+    </div>
+
+    <div class="card">
         <h2>Status</h2>
-        {% if !app.package_name.is_empty() %}
-        <p>Package: <strong>{{ app.package_name }}</strong></p>
-        {% endif %}
         {% if app.source_type == "github" %}
         <p>Source: <a href="https://github.com/{{ app.github_repo }}">{{ app.github_repo }}</a></p>
         {% else %}
@@ -75,6 +94,16 @@
                 <input type="checkbox" name="enabled" value="on" {% if app.enabled %}checked{% endif %} onchange="this.form.submit()">
                 Enabled - {% if app.source_type == "github" %}checked automatically every hour{% else %}pushed to devices when synced{% endif %}
             </label>
+        </form>
+    </div>
+
+    <div class="card">
+        <form method="post" action="/apps/tracked/{{ app.id }}/is-launcher">
+            <label class="checkbox-row">
+                <input type="checkbox" name="is_launcher" value="on" {% if app.is_launcher %}checked{% endif %} onchange="this.form.submit()">
+                This is the launcher app
+            </label>
+            <p class="hint">Marks this row as the launcher/MDM agent itself - it becomes permanently installed on every device (can't be unchecked on a device's own page) and can't be removed from this list. There should be exactly one app marked this way.</p>
         </form>
     </div>
 

@@ -422,6 +422,42 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
     .into_response()
 }
 
+/// Flips whether one tracked app is pushed to one device - a standalone auto-submitting toggle
+/// (see device_detail.html's "Apps to install" card), not folded into the big `update_policy` form
+/// like the rest of a device's settings. Deliberately different from that form's "edit several
+/// things, then click Save" pattern - live testing showed an admin checking one of these boxes and
+/// *not* separately scrolling down to hit the unrelated form's Save button, since every other
+/// on/off switch in this app (tracked_apps.rs's `set_enabled`/`set_include_prereleases`, this
+/// file's own quick-toggles elsewhere) already auto-saves on change. The launcher's own row never
+/// reaches this handler - its checkbox in the template is `disabled`, and a disabled control can't
+/// be interacted with to submit a request in the first place.
+pub async fn toggle_tracked_app(
+    State(state): State<AppState>,
+    Path((id, app_id)): Path<(i64, i64)>,
+    Form(form): Form<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    if form.contains_key("selected") {
+        sqlx::query(
+            "INSERT OR IGNORE INTO device_tracked_apps (device_id, tracked_app_id) VALUES (?, ?)",
+        )
+        .bind(id)
+        .bind(app_id)
+        .execute(&state.db)
+        .await
+        .ok();
+    } else {
+        sqlx::query("DELETE FROM device_tracked_apps WHERE device_id = ? AND tracked_app_id = ?")
+            .bind(id)
+            .bind(app_id)
+            .execute(&state.db)
+            .await
+            .ok();
+    }
+
+    let _ = state.command_notify.send(id);
+    Redirect::to(&format!("/devices/{id}"))
+}
+
 /// Repeated `allowed_packages` checkbox values can't be collected into a
 /// `Vec<String>` via axum's built-in `Form` extractor (it deserializes each
 /// key as a single scalar, so a form with one or more identically-named
@@ -433,13 +469,10 @@ pub async fn update_policy(
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     let mut allowed_packages = Vec::new();
-    let mut selected_apps = Vec::new();
     let mut fields: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for (key, value) in form_urlencoded::parse(&body) {
         if key == "allowed_packages" {
             allowed_packages.push(value.into_owned());
-        } else if key == "selected_apps" {
-            selected_apps.push(value.into_owned());
         } else {
             fields.insert(key.into_owned(), value.into_owned());
         }
@@ -563,31 +596,6 @@ pub async fn update_policy(
     .execute(&state.db)
     .await
     .ok();
-
-    // Replace-all semantics, same as allowlist_json above - simpler than diffing, and this list is
-    // small (a handful of tracked apps at most). The launcher's own row is never submitted (its
-    // checkbox is rendered disabled in device_detail.html - a disabled control never appears in
-    // form data), so it never ends up here; it doesn't need to, since it's unconditionally
-    // included for every device regardless of this table - see device_api::tracked_app_updates.
-    let selected_app_ids: Vec<i64> = selected_apps
-        .iter()
-        .filter_map(|s| s.parse::<i64>().ok())
-        .collect();
-    sqlx::query("DELETE FROM device_tracked_apps WHERE device_id = ?")
-        .bind(id)
-        .execute(&state.db)
-        .await
-        .ok();
-    for app_id in &selected_app_ids {
-        sqlx::query(
-            "INSERT OR IGNORE INTO device_tracked_apps (device_id, tracked_app_id) VALUES (?, ?)",
-        )
-        .bind(id)
-        .bind(app_id)
-        .execute(&state.db)
-        .await
-        .ok();
-    }
 
     // Nudges the device to re-sync immediately over the same SSE connection Find My Device uses
     // for ring/lock, rather than waiting out the rest of the background poll interval - the nudge

@@ -186,6 +186,10 @@ async fn main() {
             get(handlers::tracked_apps::view_tracked_app),
         )
         .route(
+            "/apps/tracked/{id}/edit",
+            post(handlers::tracked_apps::update_tracked_app),
+        )
+        .route(
             "/apps/tracked/{id}/upload",
             post(handlers::tracked_apps::upload_tracked_app_release)
                 .layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
@@ -203,8 +207,16 @@ async fn main() {
             post(handlers::tracked_apps::set_include_prereleases),
         )
         .route(
+            "/apps/tracked/{id}/is-launcher",
+            post(handlers::tracked_apps::set_is_launcher),
+        )
+        .route(
             "/apps/tracked/{id}/delete",
             post(handlers::tracked_apps::delete_tracked_app),
+        )
+        .route(
+            "/devices/{id}/apps/{app_id}/toggle",
+            post(handlers::devices::toggle_tracked_app),
         )
         .route("/dns", get(handlers::dns_filter::show_dns_filter))
         .route("/dns/upstream", post(handlers::dns_filter::set_upstream))

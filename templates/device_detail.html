@@ -36,6 +36,32 @@
     </div>
     {% endif %}
 
+    <div class="card">
+        <h2>Apps to install</h2>
+        <p class="subtitle">Which apps from the <a href="/apps">Apps</a> list get pushed to this device. Adding an app there doesn't install it anywhere until it's checked here for a specific device. Each checkbox saves itself immediately - no separate Save button.</p>
+        {% if tracked_apps.is_empty() %}
+        <p class="subtitle">No apps tracked yet - add one from the <a href="/apps">Apps</a> tab first.</p>
+        {% else %}
+        <div class="app-checkbox-list">
+            {% for app in tracked_apps %}
+            {% if app.is_launcher %}
+            <label class="checkbox-row">
+                <input type="checkbox" checked disabled>
+                {{ app.name }} (launcher - always installed)
+            </label>
+            {% else %}
+            <form method="post" action="/devices/{{ device.id }}/apps/{{ app.id }}/toggle">
+                <label class="checkbox-row">
+                    <input type="checkbox" name="selected" {% if app.checked %}checked{% endif %} onchange="this.form.submit()">
+                    {{ app.name }}
+                </label>
+            </form>
+            {% endif %}
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
     <form method="post" action="/devices/{{ device.id }}/policy" class="card">
         <h2>Kiosk mode</h2>
         <label class="checkbox-row">
@@ -62,26 +88,6 @@
             <label class="checkbox-row">
                 <input type="checkbox" name="allowed_packages" value="{{ app.package_name }}" {% if app.checked %}checked{% endif %}>
                 {{ app.label }}
-            </label>
-            {% endfor %}
-        </div>
-        {% endif %}
-
-        <h2>Apps to install</h2>
-        <p class="subtitle">Which apps from the <a href="/apps">Apps</a> list get pushed to this device. Adding an app there doesn't install it anywhere until it's checked here for a specific device.</p>
-        {% if tracked_apps.is_empty() %}
-        <p class="subtitle">No apps tracked yet - add one from the <a href="/apps">Apps</a> tab first.</p>
-        {% else %}
-        <div class="app-checkbox-list">
-            {% for app in tracked_apps %}
-            <label class="checkbox-row">
-                {% if app.is_launcher %}
-                <input type="checkbox" checked disabled>
-                {{ app.name }} (launcher - always installed)
-                {% else %}
-                <input type="checkbox" name="selected_apps" value="{{ app.id }}" {% if app.checked %}checked{% endif %}>
-                {{ app.name }}
-                {% endif %}
             </label>
             {% endfor %}
         </div>
