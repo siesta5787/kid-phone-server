@@ -14,9 +14,15 @@
     <div class="error">{{ e }}</div>
     {% endif %}
 
+    {% if app.is_launcher %}
+    <p class="hint">This is the launcher app itself - it's always installed on every device and can't be removed from this list.</p>
+    {% endif %}
+
     <div class="card">
         <h2>Status</h2>
+        {% if !app.package_name.is_empty() %}
         <p>Package: <strong>{{ app.package_name }}</strong></p>
+        {% endif %}
         {% if app.source_type == "github" %}
         <p>Source: <a href="https://github.com/{{ app.github_repo }}">{{ app.github_repo }}</a></p>
         {% else %}
@@ -72,6 +78,7 @@
         </form>
     </div>
 
+    {% if !app.is_launcher %}
     <div class="card">
         <details>
             <summary class="button-danger" style="display:inline-block; cursor:pointer; list-style:none;">Remove this app&hellip;</summary>
@@ -81,6 +88,7 @@
             </form>
         </details>
     </div>
+    {% endif %}
 </main>
 </body>
 </html>

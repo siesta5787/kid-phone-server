@@ -67,6 +67,26 @@
         </div>
         {% endif %}
 
+        <h2>Apps to install</h2>
+        <p class="subtitle">Which apps from the <a href="/apps">Apps</a> list get pushed to this device. Adding an app there doesn't install it anywhere until it's checked here for a specific device.</p>
+        {% if tracked_apps.is_empty() %}
+        <p class="subtitle">No apps tracked yet - add one from the <a href="/apps">Apps</a> tab first.</p>
+        {% else %}
+        <div class="app-checkbox-list">
+            {% for app in tracked_apps %}
+            <label class="checkbox-row">
+                {% if app.is_launcher %}
+                <input type="checkbox" checked disabled>
+                {{ app.name }} (launcher - always installed)
+                {% else %}
+                <input type="checkbox" name="selected_apps" value="{{ app.id }}" {% if app.checked %}checked{% endif %}>
+                {{ app.name }}
+                {% endif %}
+            </label>
+            {% endfor %}
+        </div>
+        {% endif %}
+
         <h2>Schedule</h2>
         <p class="subtitle">Leave a field blank for no restriction at that time.</p>
         <div class="schedule-grid">

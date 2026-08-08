@@ -411,20 +411,25 @@ pub async fn commands_stream(
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
-/// Every enabled tracked app that has a synced release - covers the
-/// launcher's own self-update too now, since it's just another row here.
-/// `download_url` is computed per-row rather than a fixed string, since
-/// there's one download endpoint per app id. `release_tag` is composited
-/// with the asset id when one's cached (GitHub-sourced apps) - see
-/// `handlers::tracked_apps::sync_one_app`'s doc comment for why a rolling
-/// tag alone can't be trusted to signal "this is a new build" client-side.
+/// Every enabled tracked app that has a synced release AND is actually scoped to this device -
+/// either explicitly selected (`device_tracked_apps`) or the launcher itself (`is_launcher`,
+/// always included for every device regardless of selection - see migrations/0013's doc comment).
+/// `download_url` is computed per-row rather than a fixed string, since there's one download
+/// endpoint per app id. `release_tag` is composited with the asset id when one's cached
+/// (GitHub-sourced apps) - see `handlers::tracked_apps::sync_one_app`'s doc comment for why a
+/// rolling tag alone can't be trusted to signal "this is a new build" client-side.
 pub async fn tracked_app_updates(
     State(state): State<AppState>,
-    Extension(AuthedDevice(_device)): Extension<AuthedDevice>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
 ) -> impl IntoResponse {
     let apps = sqlx::query_as::<_, TrackedApp>(
-        "SELECT * FROM tracked_apps WHERE enabled = 1 AND latest_release_tag IS NOT NULL",
+        "SELECT ta.* FROM tracked_apps ta \
+         WHERE ta.enabled = 1 AND ta.latest_release_tag IS NOT NULL \
+         AND (ta.is_launcher = 1 OR EXISTS ( \
+             SELECT 1 FROM device_tracked_apps dta \
+             WHERE dta.device_id = ? AND dta.tracked_app_id = ta.id))",
     )
+    .bind(device.id)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
@@ -438,9 +443,11 @@ pub async fn tracked_app_updates(
                 None => tag,
             };
             Some(TrackedAppUpdate {
+                id: app.id,
                 package_name: app.package_name,
                 release_tag,
                 download_url: format!("/api/devices/apps/{}/download", app.id),
+                is_launcher: app.is_launcher,
             })
         })
         .collect();

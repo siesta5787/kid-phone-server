@@ -17,7 +17,7 @@
     <div class="device-list">
         {% for app in tracked %}
         <a class="device-card" href="/apps/tracked/{{ app.id }}">
-            <span class="device-name">{{ app.name }}</span>
+            <span class="device-name">{{ app.name }}{% if app.is_launcher %} &middot; Launcher{% endif %}</span>
             <span class="device-status">
                 {% if let Some(tag) = app.latest_release_tag %}
                 {{ tag }}{% if !app.enabled %} &middot; disabled{% endif %}

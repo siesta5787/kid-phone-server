@@ -92,6 +92,10 @@ pub struct TrackedApp {
     pub latest_release_file_path: Option<String>,
     pub last_checked_at: Option<String>,
     pub created_at: String,
+    /// See migrations/0013_device_tracked_apps.sql - marks the one row that
+    /// is the launcher itself, which can't be deleted or deselected on any
+    /// device.
+    pub is_launcher: bool,
 }
 
 /// Singleton row (id always 1) - see migrations/0009_dns_filter.sql.
@@ -300,7 +304,16 @@ pub struct DnsBlocklistCategory {
 
 #[derive(Serialize)]
 pub struct TrackedAppUpdate {
+    pub id: i64,
+    /// Kept for the admin's own reference and for backward compat with
+    /// already-installed older client builds that still key their local
+    /// install-state tracking off it - no longer load-bearing on the server
+    /// side, and may be empty (see tracked_apps_add.html - typing a real
+    /// Android package name is optional now). A current client keys off
+    /// [id]/[is_launcher] instead - see kids-launcher-mdm's
+    /// `MdmSyncWorker.checkForTrackedAppUpdates`.
     pub package_name: String,
     pub release_tag: String,
     pub download_url: String,
+    pub is_launcher: bool,
 }

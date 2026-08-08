@@ -452,15 +452,26 @@ pub async fn delete_tracked_app(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    if let Ok(Some(app)) =
-        sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&state.db)
-            .await
-    {
-        if let Some(path) = &app.latest_release_file_path {
-            tokio::fs::remove_file(path).await.ok();
-        }
+    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+    // Enforced here, not just hidden in tracked_app_detail.html - the launcher is the app that
+    // enforces every other restriction on the phone, so there's no safe way to let an admin
+    // remove it from the push list. The template already doesn't render a delete control for it;
+    // this is defense-in-depth against a direct POST.
+    let Some(app) = app else {
+        return Redirect::to("/apps");
+    };
+    if app.is_launcher {
+        return Redirect::to(&format!("/apps/tracked/{id}"));
+    }
+
+    if let Some(path) = &app.latest_release_file_path {
+        tokio::fs::remove_file(path).await.ok();
     }
 
     sqlx::query("DELETE FROM tracked_apps WHERE id = ?")

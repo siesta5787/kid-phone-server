@@ -5,7 +5,7 @@ use axum::{Extension, Form};
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::models::{Device, DevicePolicy, DeviceStatus, InstalledApp};
+use crate::models::{Device, DevicePolicy, DeviceStatus, InstalledApp, TrackedApp};
 use crate::security::{self, CurrentAdmin};
 
 /// How long a freshly-generated enrollment code stays valid before it must
@@ -218,6 +218,19 @@ struct AppCheckbox {
     checked: bool,
 }
 
+/// One row per app from the global Apps list (`tracked_apps`), scoped to whether *this* device
+/// gets it pushed - see migrations/0013_device_tracked_apps.sql. The launcher's own row is always
+/// `checked` and rendered disabled in device_detail.html (also enforced server-side in
+/// `update_policy`, which never lets a submitted `selected_apps` list affect it) - there's no
+/// real-world case for a kid's phone not running the app that enforces every other restriction on
+/// it.
+struct TrackedAppCheckbox {
+    id: i64,
+    name: String,
+    checked: bool,
+    is_launcher: bool,
+}
+
 /// The six parent-facing LockTask features, decoded from/encoded into the
 /// raw `lock_task_features` bitmask Android's `setLockTaskFeatures` expects.
 /// Not exposing `LOCK_TASK_FEATURE_BLOCK_ACTIVITY_START_IN_TASK` (64) - no
@@ -253,6 +266,7 @@ struct DeviceDetailTemplate {
     title: String,
     device: Device,
     apps: Vec<AppCheckbox>,
+    tracked_apps: Vec<TrackedAppCheckbox>,
     weekday_start: String,
     weekday_end: String,
     weekend_start: String,
@@ -349,6 +363,29 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         })
         .collect();
 
+    let all_tracked = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps ORDER BY name")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+    let selected_app_ids: std::collections::HashSet<i64> = sqlx::query_scalar(
+        "SELECT tracked_app_id FROM device_tracked_apps WHERE device_id = ?",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .collect();
+    let tracked_apps = all_tracked
+        .into_iter()
+        .map(|a| TrackedAppCheckbox {
+            checked: a.is_launcher || selected_app_ids.contains(&a.id),
+            id: a.id,
+            name: a.name,
+            is_launcher: a.is_launcher,
+        })
+        .collect();
+
     let lock_task_features = policy.lock_task_features.unwrap_or(0);
     let offline_override_used = latest_status
         .as_ref()
@@ -377,6 +414,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             quick_control_brightness: policy.quick_controls_mask & QUICK_CONTROL_BRIGHTNESS != 0,
             device,
             apps,
+            tracked_apps,
             latest_status,
         }
         .render()
@@ -396,10 +434,13 @@ pub async fn update_policy(
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     let mut allowed_packages = Vec::new();
+    let mut selected_apps = Vec::new();
     let mut fields: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for (key, value) in form_urlencoded::parse(&body) {
         if key == "allowed_packages" {
             allowed_packages.push(value.into_owned());
+        } else if key == "selected_apps" {
+            selected_apps.push(value.into_owned());
         } else {
             fields.insert(key.into_owned(), value.into_owned());
         }
@@ -523,6 +564,31 @@ pub async fn update_policy(
     .execute(&state.db)
     .await
     .ok();
+
+    // Replace-all semantics, same as allowlist_json above - simpler than diffing, and this list is
+    // small (a handful of tracked apps at most). The launcher's own row is never submitted (its
+    // checkbox is rendered disabled in device_detail.html - a disabled control never appears in
+    // form data), so it never ends up here; it doesn't need to, since it's unconditionally
+    // included for every device regardless of this table - see device_api::tracked_app_updates.
+    let selected_app_ids: Vec<i64> = selected_apps
+        .iter()
+        .filter_map(|s| s.parse::<i64>().ok())
+        .collect();
+    sqlx::query("DELETE FROM device_tracked_apps WHERE device_id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .ok();
+    for app_id in &selected_app_ids {
+        sqlx::query(
+            "INSERT OR IGNORE INTO device_tracked_apps (device_id, tracked_app_id) VALUES (?, ?)",
+        )
+        .bind(id)
+        .bind(app_id)
+        .execute(&state.db)
+        .await
+        .ok();
+    }
 
     // Nudges the device to re-sync immediately over the same SSE connection Find My Device uses
     // for ring/lock, rather than waiting out the rest of the background poll interval - the nudge
