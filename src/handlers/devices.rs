@@ -367,15 +367,14 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         .fetch_all(&state.db)
         .await
         .unwrap_or_default();
-    let selected_app_ids: std::collections::HashSet<i64> = sqlx::query_scalar(
-        "SELECT tracked_app_id FROM device_tracked_apps WHERE device_id = ?",
-    )
-    .bind(id)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default()
-    .into_iter()
-    .collect();
+    let selected_app_ids: std::collections::HashSet<i64> =
+        sqlx::query_scalar("SELECT tracked_app_id FROM device_tracked_apps WHERE device_id = ?")
+            .bind(id)
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
     let tracked_apps = all_tracked
         .into_iter()
         .map(|a| TrackedAppCheckbox {
