@@ -382,3 +382,36 @@ pub struct JournalThreadSummary {
     pub preview: String,
     pub last_occurred_at: i64,
 }
+
+// ---------------------------------------------------------------------
+// Browsing history (kids-mdm-browser integration) - see
+// migrations/0016_device_browser_history.sql and kids-launcher-mdm's
+// BrowserHistorySync.kt. Same journal-provider pattern as the conversation
+// journal above, but URL visits have no thread/recipient, hence a separate
+// table/struct rather than reusing JournalEntryUpload.
+// ---------------------------------------------------------------------
+
+/// One row pulled from the browser fork's `content://<applicationId>.journal/entries`
+/// provider and forwarded by the client - see `handlers::device_api::browser_history_upload`.
+/// `visited_at`/`device_created_at` are the provider's own `timestamp`/`created_at` columns,
+/// renamed here to avoid reading as "when the server received this."
+#[derive(Deserialize)]
+pub struct BrowserHistoryUpload {
+    pub remote_id: i64,
+    pub url: String,
+    pub title: Option<String>,
+    pub visited_at: i64,
+    pub device_created_at: i64,
+}
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct DeviceBrowserHistoryEntry {
+    pub id: i64,
+    pub device_id: i64,
+    pub remote_id: i64,
+    pub url: String,
+    pub title: Option<String>,
+    pub visited_at: i64,
+    pub device_created_at: i64,
+    pub received_at: String,
+}

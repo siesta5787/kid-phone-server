@@ -253,6 +253,10 @@ async fn main() {
             "/devices/{id}/journal/media/{remote_id}",
             get(handlers::journal::download_media),
         )
+        .route(
+            "/devices/{id}/browser-history",
+            get(handlers::browser_history::show_history),
+        )
         .route("/settings", get(handlers::settings::settings_hub))
         .route("/backups", get(handlers::backups::list_backups))
         .route("/backups/create", post(handlers::backups::create_backup))
@@ -367,6 +371,10 @@ async fn main() {
             "/api/devices/journal/media/{remote_id}",
             post(handlers::device_api::journal_media_upload)
                 .layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
+        )
+        .route(
+            "/api/devices/browser-history",
+            post(handlers::device_api::browser_history_upload),
         )
         .layer(from_fn_with_state(
             state.clone(),

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>{{ device.name }}</h1>
+    </div>
+    <p class="subtitle">Browsing history pulled from this device's browser. <a href="/devices/{{ device.id }}">&larr; Back to device</a></p>
+
+    <div class="card">
+        {% if entries.is_empty() %}
+        <p class="empty-state">Nothing synced yet - either this device isn't running the browser fork, or it hasn't reported in.</p>
+        {% else %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Visited</th>
+                    <th>Title</th>
+                    <th>URL</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in entries %}
+                <tr>
+                    <td data-ts-ms="{{ e.visited_at }}"></td>
+                    <td>{{ e.title.as_deref().unwrap_or("") }}</td>
+                    <td><a href="{{ e.url }}" target="_blank" rel="noopener">{{ e.url }}</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+</main>
+<script>
+document.querySelectorAll("[data-ts-ms]").forEach(function (el) {
+    var ms = parseInt(el.getAttribute("data-ts-ms"), 10);
+    if (!isNaN(ms)) {
+        el.textContent = new Date(ms).toLocaleString();
+    }
+});
+</script>
+</body>
+</html>

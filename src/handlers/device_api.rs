@@ -12,9 +12,10 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::AppState;
 use crate::models::{
-    CommandResultRequest, Device, DeviceCommand, DevicePolicy, DnsBlocklistCategory,
-    DnsEventReport, DnsFilterSettings, EnrollRequest, EnrollResponse, JournalEntryUpload,
-    PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
+    BrowserHistoryUpload, CommandResultRequest, Device, DeviceCommand, DevicePolicy,
+    DnsBlocklistCategory, DnsEventReport, DnsFilterSettings, EnrollRequest, EnrollResponse,
+    JournalEntryUpload, PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp,
+    TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -648,4 +649,46 @@ fn guess_media_extension(content_type: &str) -> &'static str {
         "audio/ogg" => "ogg",
         _ => "bin",
     }
+}
+
+/// Batch-ingests browsing-history rows pulled from the kids-mdm-browser fork by the client -
+/// see migrations/0016_device_browser_history.sql and kids-launcher-mdm's BrowserHistorySync.kt.
+/// Same all-or-nothing transaction and upsert-on-conflict rationale as [journal_upload]: the
+/// client only advances its sync cursor after this returns success, and a retried batch after a
+/// genuine failure is safe because `remote_id` just overwrites itself with identical data.
+pub async fn browser_history_upload(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
+    Json(entries): Json<Vec<BrowserHistoryUpload>>,
+) -> impl IntoResponse {
+    let Ok(mut tx) = state.db.begin().await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+
+    for entry in entries.iter().take(200) {
+        let result = sqlx::query(
+            "INSERT INTO device_browser_history_entries \
+             (device_id, remote_id, url, title, visited_at, device_created_at) \
+             VALUES (?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(device_id, remote_id) DO UPDATE SET \
+                title = excluded.title",
+        )
+        .bind(device.id)
+        .bind(entry.remote_id)
+        .bind(&entry.url)
+        .bind(&entry.title)
+        .bind(entry.visited_at)
+        .bind(entry.device_created_at)
+        .execute(&mut *tx)
+        .await;
+
+        if result.is_err() {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    if tx.commit().await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
 }

@@ -43,6 +43,12 @@
     </div>
 
     <div class="card">
+        <h2>Browsing history</h2>
+        <p class="subtitle">URLs visited on this device, if it's running the browser fork with the history-journal integration.</p>
+        <a href="/devices/{{ device.id }}/browser-history" class="button-small">View history</a>
+    </div>
+
+    <div class="card">
         <h2>Apps to install</h2>
         <p class="subtitle">Which apps from the <a href="/apps">Apps</a> list get pushed to this device. Adding an app there doesn't install it anywhere until it's checked here for a specific device. Each checkbox saves itself immediately - no separate Save button.</p>
         {% if tracked_apps.is_empty() %}
