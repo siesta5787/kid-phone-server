@@ -327,3 +327,58 @@ pub struct TrackedAppUpdate {
     pub download_url: String,
     pub is_launcher: bool,
 }
+
+// ---------------------------------------------------------------------
+// Conversation journal (kids-mdm-im integration) - see
+// migrations/0015_device_journal.sql and kids-launcher-mdm's JournalSync.kt
+// ---------------------------------------------------------------------
+
+/// One row pulled from kids-mdm-im's `content://com.kidsmdm.im.journal/entries`
+/// provider and forwarded by the client - see `handlers::device_api::journal_upload`.
+/// `occurred_at`/`device_created_at` are the provider's own `timestamp`/`created_at`
+/// columns, renamed here to avoid reading as "when the server received this."
+#[derive(Deserialize)]
+pub struct JournalEntryUpload {
+    pub remote_id: i64,
+    pub thread_id: i64,
+    pub recipient_id: String,
+    pub display_name: Option<String>,
+    pub direction: String,
+    pub entry_type: String,
+    pub occurred_at: i64,
+    pub body: Option<String>,
+    pub media_content_type: Option<String>,
+    pub call_type: Option<String>,
+    pub call_event: Option<String>,
+    pub device_created_at: i64,
+}
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct DeviceJournalEntry {
+    pub id: i64,
+    pub device_id: i64,
+    pub remote_id: i64,
+    pub thread_id: i64,
+    pub recipient_id: String,
+    pub display_name: Option<String>,
+    pub direction: String,
+    pub entry_type: String,
+    pub occurred_at: i64,
+    pub body: Option<String>,
+    pub media_content_type: Option<String>,
+    pub media_path: Option<String>,
+    pub call_type: Option<String>,
+    pub call_event: Option<String>,
+    pub device_created_at: i64,
+    pub received_at: String,
+}
+
+/// One entry in the thread-picker sidebar - `preview` is the most recent
+/// message body (or a placeholder for MEDIA/CALL rows), so an admin can
+/// recognize a conversation without opening it.
+pub struct JournalThreadSummary {
+    pub thread_id: i64,
+    pub display_name: Option<String>,
+    pub preview: String,
+    pub last_occurred_at: i64,
+}

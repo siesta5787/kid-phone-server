@@ -245,6 +245,14 @@ async fn main() {
             post(handlers::dns_filter::set_device_blocklist_override),
         )
         .route("/dns/log", get(handlers::dns_filter::show_dns_log))
+        .route(
+            "/devices/{id}/journal",
+            get(handlers::journal::show_journal),
+        )
+        .route(
+            "/devices/{id}/journal/media/{remote_id}",
+            get(handlers::journal::download_media),
+        )
         .route("/settings", get(handlers::settings::settings_hub))
         .route("/backups", get(handlers::backups::list_backups))
         .route("/backups/create", post(handlers::backups::create_backup))
@@ -350,6 +358,15 @@ async fn main() {
         .route(
             "/api/devices/dns-events",
             post(handlers::device_api::dns_events),
+        )
+        .route(
+            "/api/devices/journal",
+            post(handlers::device_api::journal_upload),
+        )
+        .route(
+            "/api/devices/journal/media/{remote_id}",
+            post(handlers::device_api::journal_media_upload)
+                .layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
         )
         .layer(from_fn_with_state(
             state.clone(),

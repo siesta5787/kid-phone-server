@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>{{ device.name }}</h1>
+    </div>
+    <p class="subtitle">Conversations pulled from this device's messenger. <a href="/devices/{{ device.id }}">&larr; Back to device</a></p>
+
+    {% if threads.is_empty() %}
+    <p class="empty-state">Nothing synced yet - either this device isn't running the messenger fork, or it hasn't reported in.</p>
+    {% else %}
+    <div class="card">
+        <label for="thread_select">Conversation</label>
+        <select id="thread_select" onchange="if (this.value) location.href='/devices/{{ device.id }}/journal?thread_id=' + this.value;" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text);">
+            {% for t in threads %}
+            <option value="{{ t.thread_id }}" {% if let Some(sel) = selected_thread_id %}{% if t.thread_id == *sel %}selected{% endif %}{% endif %}>
+                {{ t.display_name.as_deref().unwrap_or("Unknown contact") }} &mdash; {{ t.preview }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="card">
+        {% if entries.is_empty() %}
+        <p class="subtitle">No messages in this conversation yet.</p>
+        {% else %}
+        <div class="journal-transcript">
+            {% for e in entries %}
+            <div class="journal-entry journal-entry-{{ e.direction.to_lowercase() }}">
+                <div class="journal-bubble">
+                    {% if e.entry_type == "MESSAGE" %}
+                    <div class="journal-body">{{ e.body.as_deref().unwrap_or("") }}</div>
+                    {% else if e.entry_type == "MEDIA" %}
+                        {% if let Some(ct) = e.media_content_type %}
+                            {% if ct.starts_with("image/") %}
+                            <a href="/devices/{{ device.id }}/journal/media/{{ e.remote_id }}" target="_blank" rel="noopener">
+                                <img src="/devices/{{ device.id }}/journal/media/{{ e.remote_id }}" alt="Photo" style="max-width:100%; border-radius:8px; display:block;">
+                            </a>
+                            {% else if ct.starts_with("video/") %}
+                            <video controls style="max-width:100%; border-radius:8px; display:block;">
+                                <source src="/devices/{{ device.id }}/journal/media/{{ e.remote_id }}" type="{{ ct }}">
+                            </video>
+                            {% else %}
+                            <a href="/devices/{{ device.id }}/journal/media/{{ e.remote_id }}" target="_blank" rel="noopener">&#128206; Download attachment</a>
+                            {% endif %}
+                        {% else %}
+                        <a href="/devices/{{ device.id }}/journal/media/{{ e.remote_id }}" target="_blank" rel="noopener">&#128206; Download attachment</a>
+                        {% endif %}
+                    {% else if e.entry_type == "CALL" %}
+                        {% if e.call_event.as_deref() == Some("MISSED_CALL_BLOCKING") %}
+                        <div class="journal-body" style="color:var(--color-danger);">&#128683; Blocked call attempt ({{ e.call_type.as_deref().unwrap_or("call") }})</div>
+                        {% else %}
+                        <div class="journal-body">&#128222; {{ e.call_type.as_deref().unwrap_or("Call") }} &mdash; {{ e.call_event.as_deref().unwrap_or("") }}</div>
+                        {% endif %}
+                    {% endif %}
+                    <div class="journal-timestamp" data-ts-ms="{{ e.occurred_at }}"></div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+</main>
+<script>
+document.querySelectorAll("[data-ts-ms]").forEach(function (el) {
+    var ms = parseInt(el.getAttribute("data-ts-ms"), 10);
+    if (!isNaN(ms)) {
+        el.textContent = new Date(ms).toLocaleString();
+    }
+});
+</script>
+<style>
+.journal-transcript { display: flex; flex-direction: column; gap: 10px; }
+.journal-entry { display: flex; }
+.journal-entry-outgoing { justify-content: flex-end; }
+.journal-entry-incoming { justify-content: flex-start; }
+.journal-bubble {
+    max-width: 80%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+}
+.journal-entry-outgoing .journal-bubble { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.journal-body { white-space: pre-wrap; word-break: break-word; }
+.journal-timestamp { font-size: 0.75rem; color: var(--color-text-muted); margin-top: 4px; }
+.journal-entry-outgoing .journal-timestamp { color: rgba(255,255,255,0.75); }
+</style>
+</body>
+</html>

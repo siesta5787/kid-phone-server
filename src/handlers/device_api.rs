@@ -1,8 +1,9 @@
 use std::convert::Infallible;
 use std::time::Duration;
 
+use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::{Extension, Json};
@@ -12,8 +13,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::AppState;
 use crate::models::{
     CommandResultRequest, Device, DeviceCommand, DevicePolicy, DnsBlocklistCategory,
-    DnsEventReport, DnsFilterSettings, EnrollRequest, EnrollResponse, PendingCommand,
-    PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
+    DnsEventReport, DnsFilterSettings, EnrollRequest, EnrollResponse, JournalEntryUpload,
+    PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -519,5 +520,132 @@ pub async fn tracked_app_download(
         )
             .into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+const JOURNAL_MEDIA_DIR: &str = "data/journal_media";
+
+/// Batch-ingests conversation journal rows pulled from kids-mdm-im by the client - see
+/// migrations/0015_device_journal.sql and kids-launcher-mdm's JournalSync.kt. Runs as one
+/// transaction, all-or-nothing: the client only advances its own sync cursor after this returns
+/// success, so a partial write here (some rows landed, one failed) would let it silently skip the
+/// failed row forever on the next sync. `ON CONFLICT` upsert makes a full-batch retry after a
+/// genuine failure safe - same `remote_id` just overwrites itself with identical data.
+pub async fn journal_upload(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
+    Json(entries): Json<Vec<JournalEntryUpload>>,
+) -> impl IntoResponse {
+    let Ok(mut tx) = state.db.begin().await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+
+    for entry in entries.iter().take(200) {
+        let result = sqlx::query(
+            "INSERT INTO device_journal_entries \
+             (device_id, remote_id, thread_id, recipient_id, display_name, direction, \
+              entry_type, occurred_at, body, media_content_type, call_type, call_event, \
+              device_created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(device_id, remote_id) DO UPDATE SET \
+                display_name = excluded.display_name, \
+                body = excluded.body, \
+                media_content_type = excluded.media_content_type",
+        )
+        .bind(device.id)
+        .bind(entry.remote_id)
+        .bind(entry.thread_id)
+        .bind(&entry.recipient_id)
+        .bind(&entry.display_name)
+        .bind(&entry.direction)
+        .bind(&entry.entry_type)
+        .bind(entry.occurred_at)
+        .bind(&entry.body)
+        .bind(&entry.media_content_type)
+        .bind(&entry.call_type)
+        .bind(&entry.call_event)
+        .bind(entry.device_created_at)
+        .execute(&mut *tx)
+        .await;
+
+        if result.is_err() {
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    if tx.commit().await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// Uploads the media bytes for one already-ingested MEDIA row - kept as a separate call from
+/// [journal_upload] rather than inlined (e.g. base64 in the JSON batch) since photos/video can run
+/// well past what belongs in a single JSON request, and one bad/huge attachment shouldn't be able
+/// to fail an entire batch of otherwise-fine text entries. Requires the row to already exist (i.e.
+/// [journal_upload] must run first for this `remote_id`) - both scopes a device to only ever
+/// overwrite its own rows and rejects an orphan upload for a `remote_id` that was never announced.
+pub async fn journal_media_upload(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
+    Path(remote_id): Path<i64>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let exists: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM device_journal_entries WHERE device_id = ? AND remote_id = ?",
+    )
+    .bind(device.id)
+    .bind(remote_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    if exists.is_none() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    let dir = format!("{JOURNAL_MEDIA_DIR}/{}", device.id);
+    if tokio::fs::create_dir_all(&dir).await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let ext = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(guess_media_extension)
+        .unwrap_or("bin");
+    let file_path = format!("{dir}/{remote_id}.{ext}");
+    if tokio::fs::write(&file_path, &body).await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    sqlx::query(
+        "UPDATE device_journal_entries SET media_path = ? WHERE device_id = ? AND remote_id = ?",
+    )
+    .bind(&file_path)
+    .bind(device.id)
+    .bind(remote_id)
+    .execute(&state.db)
+    .await
+    .ok();
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+/// Cosmetic only - the extension just makes a file on disk recognizable at a glance. The admin
+/// viewer renders using the DB's own `media_content_type` column, never this.
+fn guess_media_extension(content_type: &str) -> &'static str {
+    match content_type.split(';').next().unwrap_or("").trim() {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "video/mp4" => "mp4",
+        "video/3gpp" => "3gp",
+        "audio/mpeg" => "mp3",
+        "audio/aac" => "aac",
+        "audio/ogg" => "ogg",
+        _ => "bin",
     }
 }

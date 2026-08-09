@@ -37,6 +37,12 @@
     {% endif %}
 
     <div class="card">
+        <h2>Conversations</h2>
+        <p class="subtitle">Messages, photos/videos, and calls synced from this device's messenger, if it's running one that supports the journal integration.</p>
+        <a href="/devices/{{ device.id }}/journal" class="button-small">View conversations</a>
+    </div>
+
+    <div class="card">
         <h2>Apps to install</h2>
         <p class="subtitle">Which apps from the <a href="/apps">Apps</a> list get pushed to this device. Adding an app there doesn't install it anywhere until it's checked here for a specific device. Each checkbox saves itself immediately - no separate Save button.</p>
         {% if tracked_apps.is_empty() %}
