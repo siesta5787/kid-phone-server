@@ -43,3 +43,29 @@ Downloads the latest release and swaps the binary in place. Doesn't touch your `
 ## Backups
 
 Built in - see the **Backups** page under Settings in the admin UI. Create a backup on demand, set a schedule for automatic ones, and optionally mirror them live to an external drive plugged into the Pi. The database itself lives at `/opt/kid-phone-server/data/kidphone.db` if you ever need it directly.
+
+## Optional: Molly (Signal) push notifications via MollySocket
+
+If a kid's phone uses [Molly](https://molly.im/) (a de-Googled Signal fork) and you want it to receive push notifications without Google/FCM, Molly needs a [MollySocket](https://github.com/mollyim/mollysocket) server to relay them over [UnifiedPush](https://unifiedpush.org/). This is a separate, independently-maintained project (AGPLv3) - not something this repo forks or embeds, just an optional sibling service you can run on the same Pi. See the chat that led to this for the reasoning: it's not published as a library, and merging its Signal-protocol code into this server's own binary would mean permanently hand-maintaining someone else's security-sensitive networking code.
+
+**Prerequisite**: enable "Push notifications for other apps" in the kid's launcher app itself (Settings, on the phone) first - MollySocket needs a UnifiedPush distributor already running on that phone to hand a push endpoint to, and the launcher can be that distributor without installing a second app.
+
+1. Install it the same way as the main server:
+
+    ```
+    curl -sSL https://raw.githubusercontent.com/siesta5787/kid-phone-server/master/deploy/install_mollysocket.sh | sudo bash
+    ```
+
+   This sets up its own systemd service (`mollysocket`), listening on `127.0.0.1:8020` only, same "local by default" posture as the main server.
+
+2. Give it an HTTPS URL, same pattern as step 2 above but on a different port (kid-phone-server's admin site is already on 443):
+
+    ```
+    sudo tailscale serve --bg --https=8443 http://127.0.0.1:8020
+    ```
+
+3. On the kid's phone, open Molly → Settings → Notifications → change delivery method to **UnifiedPush** → "MollySocket server" → enter `https://<hostname>.<tailnet>.ts.net:8443` → scan the QR code it shows.
+
+**Updating**: re-run the same install command - it re-downloads the latest binary and restarts the service without touching your config or the accounts already registered.
+
+Its own database lives at `/opt/mollysocket/data/db.sqlite` if you ever need it directly - separate from kid-phone-server's own database, and not covered by this app's built-in Backups page.
