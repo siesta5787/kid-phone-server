@@ -647,6 +647,10 @@ fn guess_media_extension(content_type: &str) -> &'static str {
         "audio/mpeg" => "mp3",
         "audio/aac" => "aac",
         "audio/ogg" => "ogg",
+        // Signal-style voice notes (recorded messages, not just forwarded audio files) - m4a
+        // container, 3gpp for older/low-bitrate recordings.
+        "audio/mp4" => "m4a",
+        "audio/3gpp" => "3ga",
         _ => "bin",
     }
 }

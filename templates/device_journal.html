@@ -45,6 +45,10 @@
                             <video controls style="max-width:100%; border-radius:8px; display:block;">
                                 <source src="/devices/{{ device.id }}/journal/media/{{ e.remote_id }}" type="{{ ct }}">
                             </video>
+                            {% else if ct.starts_with("audio/") %}
+                            <audio controls style="max-width:100%; display:block;">
+                                <source src="/devices/{{ device.id }}/journal/media/{{ e.remote_id }}" type="{{ ct }}">
+                            </audio>
                             {% else %}
                             <a href="/devices/{{ device.id }}/journal/media/{{ e.remote_id }}" target="_blank" rel="noopener">&#128206; Download attachment</a>
                             {% endif %}

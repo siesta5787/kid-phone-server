@@ -19,10 +19,7 @@ struct DeviceBrowserHistoryTemplate {
     entries: Vec<DeviceBrowserHistoryEntry>,
 }
 
-pub async fn show_history(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> impl IntoResponse {
+pub async fn show_history(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     let device = sqlx::query_as::<_, Device>("SELECT * FROM devices WHERE id = ?")
         .bind(id)
         .fetch_optional(&state.db)
