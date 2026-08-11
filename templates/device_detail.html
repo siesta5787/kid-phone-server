@@ -25,7 +25,6 @@
         <h2>Status</h2>
         {% if let Some(status) = latest_status %}
         <p>Lock state: <strong>{{ status.lock_reason }}</strong></p>
-        <p>Kiosk mode: <strong>{% if status.kiosk_engaged %}Engaged{% else %}Not engaged{% endif %}</strong></p>
         {% if let Some(v) = status.app_version %}
         <p>App version: {{ v }}</p>
         {% endif %}
@@ -35,6 +34,12 @@
         {% endif %}
     </div>
     {% endif %}
+
+    <div class="card">
+        <h2>Schedule</h2>
+        <p class="subtitle">This device follows the global default schedule unless you give it a custom one.</p>
+        <a href="/schedules?device={{ device.id }}" class="button-small">Configure schedule</a>
+    </div>
 
     <div class="card">
         <h2>Conversations</h2>
@@ -75,14 +80,6 @@
     </div>
 
     <form method="post" action="/devices/{{ device.id }}/policy" class="card">
-        <h2>Kiosk mode</h2>
-        <label class="checkbox-row">
-            <input type="checkbox" name="kiosk_desired" value="on" {% if kiosk_desired %}checked{% endif %}>
-            Restrict this phone to only the apps allowed below
-        </label>
-
-        <p class="subtitle">Home, status bar, recents, notifications, and the power button menu are all still available while pinned - kiosk mode only restricts which apps can be opened, not these system features. The lock screen is also always on (a PIN is required to resume the phone) - this isn't optional, because Android suppresses the lock screen by default while pinned, and without it a device that reboots on its own (e.g. GrapheneOS's auto-reboot-after-inactivity) can get stuck with no way to unlock at all.</p>
-
         <h2>Allowed apps</h2>
         {% if apps.is_empty() %}
         <p class="subtitle">The phone hasn't reported its installed apps yet - once it does, they'll show up here to choose from.</p>
@@ -96,57 +93,6 @@
             {% endfor %}
         </div>
         {% endif %}
-
-        <h2>Schedule</h2>
-        <p class="subtitle">Leave a field blank for no restriction at that time.</p>
-        <div class="schedule-grid">
-            <div>
-                <label for="weekday_start">Weekday allowed from</label>
-                <input type="time" id="weekday_start" name="weekday_start" value="{{ weekday_start }}">
-            </div>
-            <div>
-                <label for="weekday_end">until</label>
-                <input type="time" id="weekday_end" name="weekday_end" value="{{ weekday_end }}">
-            </div>
-        </div>
-        <button type="button" class="button-small button-secondary" onclick="document.getElementById('weekday_start').value='';document.getElementById('weekday_end').value='';">Clear weekday schedule</button>
-
-        <div class="schedule-grid" style="margin-top:16px;">
-            <div>
-                <label for="weekend_start">Weekend allowed from</label>
-                <input type="time" id="weekend_start" name="weekend_start" value="{{ weekend_start }}">
-            </div>
-            <div>
-                <label for="weekend_end">until</label>
-                <input type="time" id="weekend_end" name="weekend_end" value="{{ weekend_end }}">
-            </div>
-        </div>
-        <button type="button" class="button-small button-secondary" onclick="document.getElementById('weekend_start').value='';document.getElementById('weekend_end').value='';">Clear weekend schedule</button>
-
-        <div class="schedule-grid" style="margin-top:16px;">
-            <div>
-                <label for="bedtime_start">Bedtime lock from</label>
-                <input type="time" id="bedtime_start" name="bedtime_start" value="{{ bedtime_start }}">
-            </div>
-            <div>
-                <label for="bedtime_end">until</label>
-                <input type="time" id="bedtime_end" name="bedtime_end" value="{{ bedtime_end }}">
-            </div>
-        </div>
-        <button type="button" class="button-small button-secondary" onclick="document.getElementById('bedtime_start').value='';document.getElementById('bedtime_end').value='';">Clear bedtime schedule</button>
-
-        <h2>WiFi</h2>
-        <select name="wifi_mode" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text); margin-bottom:16px;">
-            <option value="open" {% if wifi_mode == "open" %}selected{% endif %}>Open - no restriction</option>
-            <option value="restricted" {% if wifi_mode == "restricted" %}selected{% endif %}>Restricted - existing networks only, can't add new ones</option>
-        </select>
-
-        <h2>Bluetooth</h2>
-        <select name="bluetooth_mode" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text); margin-bottom:16px;">
-            <option value="open" {% if bluetooth_mode == "open" %}selected{% endif %}>Open - no restriction</option>
-            <option value="restricted" {% if bluetooth_mode == "restricted" %}selected{% endif %}>Restricted - existing devices only, can't pair new ones</option>
-            <option value="disabled" {% if bluetooth_mode == "disabled" %}selected{% endif %}>Disabled - Bluetooth turned off</option>
-        </select>
 
         <h2>Quick Controls (swipe-left screen)</h2>
         <p class="subtitle">These appear on a screen the kid can reach by swiping left from the home screen. This is the intended way for a kid to reach these controls instead of Android's own Quick Settings shade, which can't be fully locked down - a third-party app can publish its own tile there (Tailscale does) that bypasses restrictions below.</p>
@@ -171,7 +117,7 @@
         </label>
 
         <h2>Offline override PIN</h2>
-        <p class="subtitle">A failsafe for when the phone can't reach the server at all (e.g. WiFi is disabled above and there's no other connectivity). Entering this PIN directly on the phone temporarily lifts every restriction; it reasserts automatically the moment the phone can sync again.</p>
+        <p class="subtitle">A failsafe for when the phone can't reach the server at all. Entering this PIN directly on the phone temporarily lifts every restriction; it reasserts automatically the moment the phone can sync again.</p>
         {% if pin_configured %}
         <p class="subtitle">A PIN is currently set.</p>
         {% else %}

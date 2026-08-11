@@ -27,91 +27,6 @@ struct DevicesListTemplate {
     devices: Vec<DeviceListRow>,
 }
 
-struct DashboardDeviceRow {
-    id: i64,
-    name: String,
-    status_text: String,
-    lock_reason: Option<String>,
-    kiosk_engaged: bool,
-    offline_override_used: bool,
-}
-
-#[derive(Template)]
-#[template(path = "dashboard.html")]
-struct DashboardTemplate {
-    title: String,
-    device_count: usize,
-    devices: Vec<DashboardDeviceRow>,
-    any_override_used: bool,
-}
-
-/// Landing page - a quick at-a-glance summary, distinct from the full
-/// management list at `/devices`. Small enough (a handful of devices,
-/// realistically) that a query per device is simpler than one clever join,
-/// matching this app's existing style (`view_device` already does the same
-/// thing for a single device).
-pub async fn dashboard(State(state): State<AppState>) -> impl IntoResponse {
-    let devices = sqlx::query_as::<_, Device>("SELECT * FROM devices ORDER BY name")
-        .fetch_all(&state.db)
-        .await
-        .unwrap_or_default();
-
-    let device_count = devices.len();
-    let mut rows = Vec::with_capacity(device_count);
-    let mut any_override_used = false;
-
-    for d in devices {
-        let latest_status = sqlx::query_as::<_, DeviceStatus>(
-            "SELECT * FROM device_status WHERE device_id = ? ORDER BY reported_at DESC LIMIT 1",
-        )
-        .bind(d.id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
-
-        let status_text = if d.enrolled_at.is_none() {
-            "Not enrolled yet".to_string()
-        } else {
-            match &d.last_seen_at {
-                Some(t) => format!("Last seen {t}"),
-                None => "Enrolled, not seen yet".to_string(),
-            }
-        };
-
-        let offline_override_used = latest_status
-            .as_ref()
-            .map(|s| s.offline_override_used)
-            .unwrap_or(false);
-        if offline_override_used {
-            any_override_used = true;
-        }
-
-        rows.push(DashboardDeviceRow {
-            id: d.id,
-            name: d.name,
-            status_text,
-            lock_reason: latest_status.as_ref().map(|s| s.lock_reason.clone()),
-            kiosk_engaged: latest_status
-                .as_ref()
-                .map(|s| s.kiosk_engaged)
-                .unwrap_or(false),
-            offline_override_used,
-        });
-    }
-
-    Html(
-        DashboardTemplate {
-            title: "Dashboard".to_string(),
-            device_count,
-            devices: rows,
-            any_override_used,
-        }
-        .render()
-        .unwrap(),
-    )
-}
-
 pub async fn list_devices(State(state): State<AppState>) -> impl IntoResponse {
     let devices = sqlx::query_as::<_, Device>("SELECT * FROM devices ORDER BY name")
         .fetch_all(&state.db)
@@ -273,16 +188,6 @@ const QUICK_CONTROL_WIFI: i64 = 1;
 const QUICK_CONTROL_BLUETOOTH: i64 = 2;
 const QUICK_CONTROL_BRIGHTNESS: i64 = 4;
 
-const VALID_RADIO_MODES: [&str; 3] = ["open", "restricted", "disabled"];
-
-fn normalize_radio_mode(value: &str) -> String {
-    if VALID_RADIO_MODES.contains(&value) {
-        value.to_string()
-    } else {
-        "open".to_string()
-    }
-}
-
 #[derive(Template)]
 #[template(path = "device_detail.html")]
 struct DeviceDetailTemplate {
@@ -290,15 +195,6 @@ struct DeviceDetailTemplate {
     device: Device,
     apps: Vec<AppCheckbox>,
     tracked_apps: Vec<TrackedAppCheckbox>,
-    weekday_start: String,
-    weekday_end: String,
-    weekend_start: String,
-    weekend_end: String,
-    bedtime_start: String,
-    bedtime_end: String,
-    kiosk_desired: bool,
-    wifi_mode: String,
-    bluetooth_mode: String,
     pin_configured: bool,
     offline_override_used: bool,
     vpn_filter_enabled: bool,
@@ -306,21 +202,6 @@ struct DeviceDetailTemplate {
     quick_control_bluetooth: bool,
     quick_control_brightness: bool,
     latest_status: Option<DeviceStatus>,
-}
-
-/// HTML `<input type="time">` gives/expects "HH:MM" - these convert to/from
-/// the minutes-since-midnight representation the schema and the device's
-/// own (already-unit-tested) schedule logic use.
-fn minutes_to_time_input(minutes: Option<i64>) -> String {
-    match minutes {
-        Some(m) => format!("{:02}:{:02}", m / 60, m % 60),
-        None => String::new(),
-    }
-}
-
-fn time_input_to_minutes(value: &str) -> Option<i64> {
-    let (h, m) = value.split_once(':')?;
-    Some(h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?)
 }
 
 pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
@@ -344,8 +225,6 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             .flatten()
             .unwrap_or(DevicePolicy {
                 device_id: id,
-                wifi_mode: "open".to_string(),
-                bluetooth_mode: "open".to_string(),
                 // See the matching comment in device_api::policy - bool::default() is false,
                 // but a never-configured device must still show/default to filtering on.
                 vpn_filter_enabled: true,
@@ -415,15 +294,6 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
     Html(
         DeviceDetailTemplate {
             title: device.name.clone(),
-            weekday_start: minutes_to_time_input(policy.weekday_start_minutes),
-            weekday_end: minutes_to_time_input(policy.weekday_end_minutes),
-            weekend_start: minutes_to_time_input(policy.weekend_start_minutes),
-            weekend_end: minutes_to_time_input(policy.weekend_end_minutes),
-            bedtime_start: minutes_to_time_input(policy.bedtime_start_minutes),
-            bedtime_end: minutes_to_time_input(policy.bedtime_end_minutes),
-            kiosk_desired: policy.kiosk_desired,
-            wifi_mode: policy.wifi_mode,
-            bluetooth_mode: policy.bluetooth_mode,
             pin_configured: policy.override_pin_hash.is_some(),
             offline_override_used,
             vpn_filter_enabled: policy.vpn_filter_enabled,
@@ -721,9 +591,6 @@ pub async fn update_policy(
     // sleep, not just after a reboot - Android doesn't expose those as separate bits.
     let lock_task_features: i64 = DEFAULT_LOCK_TASK_FEATURES;
 
-    let wifi_mode = normalize_radio_mode(&field("wifi_mode"));
-    let bluetooth_mode = normalize_radio_mode(&field("bluetooth_mode"));
-
     let mut quick_controls_mask: i64 = 0;
     if fields.contains_key("quick_control_wifi") {
         quick_controls_mask |= QUICK_CONTROL_WIFI;
@@ -781,25 +648,13 @@ pub async fn update_policy(
     }
 
     sqlx::query(
-        "UPDATE device_policy SET allowlist_json = ?, weekday_start_minutes = ?, \
-         weekday_end_minutes = ?, weekend_start_minutes = ?, weekend_end_minutes = ?, \
-         bedtime_start_minutes = ?, bedtime_end_minutes = ?, kiosk_desired = ?, \
-         lock_task_features = ?, wifi_mode = ?, bluetooth_mode = ?, \
-         override_pin_hash = ?, override_pin_salt = ?, \
+        "UPDATE device_policy SET allowlist_json = ?, kiosk_desired = 1, \
+         lock_task_features = ?, override_pin_hash = ?, override_pin_salt = ?, \
          quick_controls_mask = ?, vpn_filter_enabled = ?, \
          updated_at = datetime('now') WHERE device_id = ?",
     )
     .bind(&allowlist_json)
-    .bind(time_input_to_minutes(&field("weekday_start")))
-    .bind(time_input_to_minutes(&field("weekday_end")))
-    .bind(time_input_to_minutes(&field("weekend_start")))
-    .bind(time_input_to_minutes(&field("weekend_end")))
-    .bind(time_input_to_minutes(&field("bedtime_start")))
-    .bind(time_input_to_minutes(&field("bedtime_end")))
-    .bind(fields.contains_key("kiosk_desired"))
     .bind(lock_task_features)
-    .bind(&wifi_mode)
-    .bind(&bluetooth_mode)
     .bind(&override_pin_hash)
     .bind(&override_pin_salt)
     .bind(quick_controls_mask)

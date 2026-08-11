@@ -14,8 +14,8 @@ use crate::AppState;
 use crate::models::{
     BrowserHistoryUpload, CommandResultRequest, Device, DeviceCommand, DevicePolicy,
     DnsBlocklistCategory, DnsEventReport, DnsFilterSettings, EnrollRequest, EnrollResponse,
-    JournalEntryUpload, PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp,
-    TrackedAppUpdate,
+    GlobalSchedule, JournalEntryUpload, PendingCommand, PolicyResponse, StatusReportRequest,
+    TrackedApp, TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -74,8 +74,6 @@ pub async fn policy(
             .flatten()
             .unwrap_or(DevicePolicy {
                 device_id: device.id,
-                wifi_mode: "open".to_string(),
-                bluetooth_mode: "open".to_string(),
                 // bool::default() is false - a brand new device (no device_policy row saved
                 // yet) must still default to filtering ON, matching the DB column's own
                 // DEFAULT 1, or a device's very first policy fetch would report filtering off.
@@ -87,6 +85,42 @@ pub async fn policy(
         .allowlist_json
         .as_deref()
         .and_then(|j| serde_json::from_str::<Vec<String>>(j).ok());
+
+    // Follows the global default schedule unless this device has its own override turned on -
+    // see migrations/0017_schedules_page.sql and handlers::schedules.
+    let (
+        weekday_start_minutes,
+        weekday_end_minutes,
+        weekend_start_minutes,
+        weekend_end_minutes,
+        bedtime_start_minutes,
+        bedtime_end_minutes,
+    ) = if policy.custom_schedule_enabled {
+        (
+            policy.weekday_start_minutes,
+            policy.weekday_end_minutes,
+            policy.weekend_start_minutes,
+            policy.weekend_end_minutes,
+            policy.bedtime_start_minutes,
+            policy.bedtime_end_minutes,
+        )
+    } else {
+        let global =
+            sqlx::query_as::<_, GlobalSchedule>("SELECT * FROM global_schedule WHERE id = 1")
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+        (
+            global.weekday_start_minutes,
+            global.weekday_end_minutes,
+            global.weekend_start_minutes,
+            global.weekend_end_minutes,
+            global.bedtime_start_minutes,
+            global.bedtime_end_minutes,
+        )
+    };
 
     // The oldest undelivered command, if any - marked delivered right here,
     // in the same request that serves it, so a second poll before the device
@@ -137,16 +171,14 @@ pub async fn policy(
 
     Json(PolicyResponse {
         allowlist,
-        weekday_start_minutes: policy.weekday_start_minutes,
-        weekday_end_minutes: policy.weekday_end_minutes,
-        weekend_start_minutes: policy.weekend_start_minutes,
-        weekend_end_minutes: policy.weekend_end_minutes,
-        bedtime_start_minutes: policy.bedtime_start_minutes,
-        bedtime_end_minutes: policy.bedtime_end_minutes,
+        weekday_start_minutes,
+        weekday_end_minutes,
+        weekend_start_minutes,
+        weekend_end_minutes,
+        bedtime_start_minutes,
+        bedtime_end_minutes,
         kiosk_desired: policy.kiosk_desired,
         lock_task_features: policy.lock_task_features.unwrap_or(0),
-        wifi_mode: policy.wifi_mode,
-        bluetooth_mode: policy.bluetooth_mode,
         override_pin_hash: policy.override_pin_hash,
         override_pin_salt: policy.override_pin_salt,
         quick_controls_mask: policy.quick_controls_mask,

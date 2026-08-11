@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>Schedules</h1>
+    </div>
+    <p class="subtitle">Every device follows the global default below unless it has its own custom schedule turned on.</p>
+
+    <form method="post" action="/schedules/global" class="card">
+        <h2>Global default</h2>
+        <p class="subtitle">Leave a field blank for no restriction at that time.</p>
+        <div class="schedule-grid">
+            <div>
+                <label for="global_weekday_start">Weekday allowed from</label>
+                <input type="time" id="global_weekday_start" name="weekday_start" value="{{ global_weekday_start }}">
+            </div>
+            <div>
+                <label for="global_weekday_end">until</label>
+                <input type="time" id="global_weekday_end" name="weekday_end" value="{{ global_weekday_end }}">
+            </div>
+        </div>
+        <button type="button" class="button-small button-secondary" onclick="document.getElementById('global_weekday_start').value='';document.getElementById('global_weekday_end').value='';">Clear weekday schedule</button>
+
+        <div class="schedule-grid" style="margin-top:16px;">
+            <div>
+                <label for="global_weekend_start">Weekend allowed from</label>
+                <input type="time" id="global_weekend_start" name="weekend_start" value="{{ global_weekend_start }}">
+            </div>
+            <div>
+                <label for="global_weekend_end">until</label>
+                <input type="time" id="global_weekend_end" name="weekend_end" value="{{ global_weekend_end }}">
+            </div>
+        </div>
+        <button type="button" class="button-small button-secondary" onclick="document.getElementById('global_weekend_start').value='';document.getElementById('global_weekend_end').value='';">Clear weekend schedule</button>
+
+        <div class="schedule-grid" style="margin-top:16px;">
+            <div>
+                <label for="global_bedtime_start">Bedtime lock from</label>
+                <input type="time" id="global_bedtime_start" name="bedtime_start" value="{{ global_bedtime_start }}">
+            </div>
+            <div>
+                <label for="global_bedtime_end">until</label>
+                <input type="time" id="global_bedtime_end" name="bedtime_end" value="{{ global_bedtime_end }}">
+            </div>
+        </div>
+        <button type="button" class="button-small button-secondary" onclick="document.getElementById('global_bedtime_start').value='';document.getElementById('global_bedtime_end').value='';">Clear bedtime schedule</button>
+
+        <button type="submit" style="margin-top:16px;">Save global default</button>
+    </form>
+
+    <div class="card">
+        <h2>Per-device override</h2>
+        <p class="subtitle">Pick a device to give it its own schedule instead of the global default above.</p>
+        <form method="get" action="/schedules">
+            <select name="device" onchange="this.form.submit()" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text);">
+                <option value="">Select a device&hellip;</option>
+                {% for d in devices %}
+                <option value="{{ d.id }}" {% if d.selected %}selected{% endif %}>{{ d.name }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+
+    {% if let Some(sel) = selected %}
+    <form method="post" action="/schedules/device/{{ sel.id }}" class="card">
+        <h2>{{ sel.name }}</h2>
+        <label class="checkbox-row">
+            <input type="checkbox" name="custom_schedule_enabled" value="on" {% if sel.custom_enabled %}checked{% endif %}>
+            Use a custom schedule for this device instead of the global default
+        </label>
+
+        <p class="subtitle" style="margin-top:12px;">Leave a field blank for no restriction at that time. These only take effect while the box above is checked.</p>
+        <div class="schedule-grid">
+            <div>
+                <label for="device_weekday_start">Weekday allowed from</label>
+                <input type="time" id="device_weekday_start" name="weekday_start" value="{{ sel.weekday_start }}">
+            </div>
+            <div>
+                <label for="device_weekday_end">until</label>
+                <input type="time" id="device_weekday_end" name="weekday_end" value="{{ sel.weekday_end }}">
+            </div>
+        </div>
+        <button type="button" class="button-small button-secondary" onclick="document.getElementById('device_weekday_start').value='';document.getElementById('device_weekday_end').value='';">Clear weekday schedule</button>
+
+        <div class="schedule-grid" style="margin-top:16px;">
+            <div>
+                <label for="device_weekend_start">Weekend allowed from</label>
+                <input type="time" id="device_weekend_start" name="weekend_start" value="{{ sel.weekend_start }}">
+            </div>
+            <div>
+                <label for="device_weekend_end">until</label>
+                <input type="time" id="device_weekend_end" name="weekend_end" value="{{ sel.weekend_end }}">
+            </div>
+        </div>
+        <button type="button" class="button-small button-secondary" onclick="document.getElementById('device_weekend_start').value='';document.getElementById('device_weekend_end').value='';">Clear weekend schedule</button>
+
+        <div class="schedule-grid" style="margin-top:16px;">
+            <div>
+                <label for="device_bedtime_start">Bedtime lock from</label>
+                <input type="time" id="device_bedtime_start" name="bedtime_start" value="{{ sel.bedtime_start }}">
+            </div>
+            <div>
+                <label for="device_bedtime_end">until</label>
+                <input type="time" id="device_bedtime_end" name="bedtime_end" value="{{ sel.bedtime_end }}">
+            </div>
+        </div>
+        <button type="button" class="button-small button-secondary" onclick="document.getElementById('device_bedtime_start').value='';document.getElementById('device_bedtime_end').value='';">Clear bedtime schedule</button>
+
+        <button type="submit" style="margin-top:16px;">Save {{ sel.name }}'s schedule</button>
+    </form>
+    {% endif %}
+</main>
+</body>
+</html>

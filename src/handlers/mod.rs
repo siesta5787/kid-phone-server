@@ -8,6 +8,7 @@ pub mod dns_filter;
 pub mod journal;
 pub mod locate;
 pub mod provisioning;
+pub mod schedules;
 pub mod settings;
 pub mod sw;
 pub mod system_maintenance;

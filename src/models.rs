@@ -35,12 +35,29 @@ pub struct DevicePolicy {
     pub bedtime_end_minutes: Option<i64>,
     pub kiosk_desired: bool,
     pub lock_task_features: Option<i64>,
-    pub wifi_mode: String,
-    pub bluetooth_mode: String,
     pub override_pin_hash: Option<String>,
     pub override_pin_salt: Option<String>,
     pub quick_controls_mask: i64,
     pub vpn_filter_enabled: bool,
+    /// Whether this device's own weekday/weekend/bedtime *_minutes columns above are actually
+    /// used - if false (the default), it follows [GlobalSchedule] instead and its own columns are
+    /// just whatever was last configured, ignored until this is turned on. See
+    /// `handlers::schedules`.
+    pub custom_schedule_enabled: bool,
+}
+
+/// Singleton (always `id = 1`) - the schedule every device follows unless it has its own
+/// `device_policy.custom_schedule_enabled` override. See `handlers::schedules`.
+#[derive(sqlx::FromRow, Clone, Default)]
+pub struct GlobalSchedule {
+    pub id: i64,
+    pub weekday_start_minutes: Option<i64>,
+    pub weekday_end_minutes: Option<i64>,
+    pub weekend_start_minutes: Option<i64>,
+    pub weekend_end_minutes: Option<i64>,
+    pub bedtime_start_minutes: Option<i64>,
+    pub bedtime_end_minutes: Option<i64>,
+    pub updated_at: String,
 }
 
 #[derive(sqlx::FromRow, Clone)]
@@ -214,8 +231,6 @@ pub struct PolicyResponse {
     pub bedtime_end_minutes: Option<i64>,
     pub kiosk_desired: bool,
     pub lock_task_features: i64,
-    pub wifi_mode: String,
-    pub bluetooth_mode: String,
     pub override_pin_hash: Option<String>,
     pub override_pin_salt: Option<String>,
     pub quick_controls_mask: i64,

@@ -6,6 +6,7 @@ mod security;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::middleware::from_fn_with_state;
+use axum::response::Redirect;
 use axum::routing::{get, post};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous};
@@ -140,8 +141,17 @@ async fn main() {
         .layer(from_fn_with_state(state.clone(), security::require_session));
 
     let admin_routes = Router::new()
-        .route("/", get(handlers::devices::dashboard))
+        .route("/", get(|| async { Redirect::to("/devices") }))
         .route("/devices", get(handlers::devices::list_devices))
+        .route("/schedules", get(handlers::schedules::show_schedules))
+        .route(
+            "/schedules/global",
+            post(handlers::schedules::save_global_schedule),
+        )
+        .route(
+            "/schedules/device/{id}",
+            post(handlers::schedules::save_device_schedule),
+        )
         .route(
             "/devices/new",
             get(handlers::devices::new_device_form).post(handlers::devices::create_device),
