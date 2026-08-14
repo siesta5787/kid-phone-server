@@ -157,8 +157,8 @@ async fn main() {
             get(handlers::devices::new_device_form).post(handlers::devices::create_device),
         )
         .route(
-            "/devices/provision",
-            get(handlers::provisioning::provision_form).post(handlers::provisioning::generate_qr),
+            "/devices/{id}/provision",
+            get(handlers::provisioning::provision_form),
         )
         .route("/devices/{id}", get(handlers::devices::view_device))
         .route(
@@ -268,6 +268,11 @@ async fn main() {
             get(handlers::browser_history::show_history),
         )
         .route("/settings", get(handlers::settings::settings_hub))
+        .route(
+            "/settings/provisioning",
+            get(handlers::settings::provisioning_settings_form)
+                .post(handlers::settings::update_provisioning_settings),
+        )
         .route("/backups", get(handlers::backups::list_backups))
         .route("/backups/create", post(handlers::backups::create_backup))
         .route(

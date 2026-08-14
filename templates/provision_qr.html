@@ -6,40 +6,43 @@
 <body>
 {% include "partials/app_header.html" %}
 <main class="container container-narrow">
-    <h1>Provision a new device</h1>
-    <p class="subtitle">Works on stock Android and most custom ROMs via the standard 6-tap QR provisioning flow. <strong>Does not currently work on GrapheneOS</strong> - its setup wizard doesn't have this hook built in yet (tracked upstream, not something we can fix here). For GrapheneOS, keep using the adb-based setup instead.</p>
+    <div class="page-header">
+        <h1>Provision {{ device.name }}</h1>
+    </div>
+    <p class="subtitle">This QR code carries a fresh one-shot enrollment code for this device, plus your server URL and Tailscale key from <a href="/settings/provisioning">Provisioning settings</a> - scanning it does setup and enrollment in one step. It goes stale the moment you leave this page or generate another one, same as a plain enrollment code.</p>
+
+    {% if missing_server_url %}
+    <div class="card" style="border-color:#dc2626;">
+        <p><strong>No server URL configured yet.</strong> Set one on the <a href="/settings/provisioning">Provisioning settings</a> page first, or this QR code won't be able to auto-enroll the device - you'd still need to type it in by hand afterward.</p>
+    </div>
+    {% endif %}
 
     <div class="card">
-        <h2>How to use it</h2>
+        <h2>Two ways to scan it</h2>
         <ol>
-            <li>Factory reset the device (or use one fresh out of the box).</li>
-            <li>On the Welcome screen, tap the same spot 6 times in a row.</li>
-            <li>Scan the QR code below when prompted.</li>
-            <li>Follow the on-screen setup - it downloads and installs the launcher and sets it as device owner automatically.</li>
-            <li>Once it boots into the launcher, open Settings and enter a device enrollment code from that device's page here, same as any other device.</li>
+            <li><strong>Stock Android / most custom ROMs (not GrapheneOS):</strong> factory reset (or use a device fresh out of the box), tap the same spot on the Welcome screen 6 times, then scan. Setup downloads and installs the launcher, sets it as device owner, and applies the server URL/Tailscale key/enrollment code automatically - no other steps.</li>
+            <li><strong>GrapheneOS, or anywhere the flow above isn't available:</strong> set up the device and grant Device Owner via <code>adb shell dpm set-device-owner</code> as usual, then open the launcher's Settings and use "Scan setup QR" - same code, same result, just triggered from inside the app instead of Android's own setup wizard.</li>
         </ol>
     </div>
 
     <div class="card">
-        <h2>WiFi (optional)</h2>
-        <p class="subtitle">Fill this in to have the device join your network automatically during setup, before it downloads the launcher. Leave blank to connect manually during setup instead.</p>
-        <form method="post" action="/devices/provision">
+        <h2>WiFi (optional, native flow only)</h2>
+        <p class="subtitle">Only used by the stock-Android zero-touch flow, to join a network before the launcher downloads. Ignored by the in-app scanner, since the device is already online by that point.</p>
+        <form method="get" action="/devices/{{ device.id }}/provision">
             <label for="wifi_ssid">Network name (SSID)</label>
             <input type="text" id="wifi_ssid" name="wifi_ssid" value="{{ wifi_ssid }}" autocomplete="off">
 
             <label for="wifi_password">Password</label>
             <input type="text" id="wifi_password" name="wifi_password" autocomplete="off">
 
-            <button type="submit">Generate QR code</button>
+            <button type="submit">Regenerate QR code</button>
         </form>
     </div>
 
-    {% if let Some(svg) = qr_svg %}
     <div class="card">
         <h2>Scan this</h2>
-        <div class="qr-code">{{ svg|safe }}</div>
+        <div class="qr-code">{{ qr_svg|safe }}</div>
     </div>
-    {% endif %}
 </main>
 </body>
 </html>

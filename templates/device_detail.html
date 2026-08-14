@@ -19,6 +19,7 @@
         <form method="post" action="/devices/{{ device.id }}/regenerate-code">
             <button type="submit" class="button-secondary">Generate new code</button>
         </form>
+        <a href="/devices/{{ device.id }}/provision" class="button-small">Provision by QR code instead</a>
     </div>
     {% else %}
     <div class="card">

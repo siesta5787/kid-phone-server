@@ -123,6 +123,17 @@ pub struct DnsFilterSettings {
     pub updated_at: String,
 }
 
+/// Singleton row (id always 1) - see migrations/0018_provisioning_settings.sql. Embedded into
+/// every device's QR provisioning payload (handlers::provisioning) - one server and one reusable
+/// Tailscale pre-auth key cover every device, so neither is per-device.
+#[derive(sqlx::FromRow, Clone, Default)]
+pub struct ProvisioningSettings {
+    pub id: i64,
+    pub server_url: String,
+    pub tailscale_auth_key: String,
+    pub updated_at: String,
+}
+
 #[derive(sqlx::FromRow, Clone)]
 pub struct DnsBlocklist {
     pub id: i64,
