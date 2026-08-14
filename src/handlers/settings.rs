@@ -40,13 +40,14 @@ struct ProvisioningSettingsTemplate {
 /// scanner for devices where Android's native zero-touch flow doesn't run (e.g. GrapheneOS) -
 /// see that handler's own doc comment for why these are global rather than per-device.
 pub async fn provisioning_settings_form(State(state): State<AppState>) -> impl IntoResponse {
-    let settings =
-        sqlx::query_as::<_, ProvisioningSettings>("SELECT * FROM provisioning_settings WHERE id = 1")
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+    let settings = sqlx::query_as::<_, ProvisioningSettings>(
+        "SELECT * FROM provisioning_settings WHERE id = 1",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
 
     Html(
         ProvisioningSettingsTemplate {
