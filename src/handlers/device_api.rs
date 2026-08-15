@@ -14,8 +14,8 @@ use crate::AppState;
 use crate::models::{
     BrowserHistoryUpload, CommandResultRequest, Device, DeviceCommand, DevicePolicy,
     DnsBlocklistCategory, DnsEventReport, DnsFilterSettings, EnrollRequest, EnrollResponse,
-    GlobalSchedule, JournalEntryUpload, PendingCommand, PolicyResponse, StatusReportRequest,
-    TrackedApp, TrackedAppUpdate,
+    GlobalSchedule, InstalledApp, JournalEntryUpload, PendingCommand, PolicyResponse,
+    StatusReportRequest, TrackedApp, TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -446,6 +446,70 @@ pub async fn status(
                     .await
                     .ok();
                 }
+            }
+        }
+    }
+
+    // Backfills tracked_apps.package_name for a catalog app that doesn't have one on file yet
+    // (a real, supported state - see tracked_app_detail.html, "Android package name (optional)" -
+    // PackageInstaller determines the real package from the APK's own signed manifest, not this
+    // field), the moment it becomes knowable from what's newly installed on this device.
+    //
+    // Without this, a no-package-name catalog app that gets pushed and installed shows up as BOTH
+    // a real "Installed" row (under its real package name, with no way to associate it back to
+    // its catalog entry) *and* a permanent phantom "Not installed" row (the catalog entry itself,
+    // which can never match anything by package name) - confirmed live. Worse, it silently never
+    // gets allowlisted either: `toggle_app`'s add_to_allowlist call at check-time is a no-op
+    // without a package name, so the app installs successfully and is then immediately suspended
+    // by the kid's own device under kiosk mode, with nothing on the admin site showing why.
+    //
+    // Heuristic, not exact - only fires when this device has exactly one catalog app selected with
+    // no package name on file, and exactly one package newly appeared since its last heartbeat.
+    // Ambiguous if more than one no-package app is mid-install for the same device at once (rare -
+    // an admin adds one, waits for it to land, then adds the next), but even a wrong guess there is
+    // strictly better than the guaranteed-wrong permanent duplicate this replaces.
+    if let Some(installed) = &report.installed_apps {
+        let awaiting_package_name: Vec<i64> = sqlx::query_scalar(
+            "SELECT ta.id FROM tracked_apps ta \
+             JOIN device_tracked_apps dta ON dta.tracked_app_id = ta.id \
+             WHERE dta.device_id = ? AND ta.package_name = ''",
+        )
+        .bind(device.id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+
+        if let [tracked_app_id] = awaiting_package_name.as_slice() {
+            let previous_json: Option<String> = sqlx::query_scalar(
+                "SELECT installed_apps_json FROM device_status WHERE device_id = ? \
+                 ORDER BY reported_at DESC LIMIT 1 OFFSET 1",
+            )
+            .bind(device.id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+            let previously_installed: std::collections::HashSet<String> = previous_json
+                .as_deref()
+                .and_then(|j| serde_json::from_str::<Vec<InstalledApp>>(j).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|a| a.package_name)
+                .collect();
+            let newly_appeared: Vec<&InstalledApp> = installed
+                .iter()
+                .filter(|a| !previously_installed.contains(&a.package_name))
+                .collect();
+
+            if let [app] = newly_appeared.as_slice() {
+                sqlx::query("UPDATE tracked_apps SET package_name = ? WHERE id = ?")
+                    .bind(&app.package_name)
+                    .bind(*tracked_app_id)
+                    .execute(&state.db)
+                    .await
+                    .ok();
+                crate::handlers::devices::add_to_allowlist(&state, device.id, &app.package_name)
+                    .await;
             }
         }
     }

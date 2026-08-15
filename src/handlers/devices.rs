@@ -501,7 +501,7 @@ async fn installed_app_status(
 /// [toggle_app] - see its own doc comment for why. `updated_at` is bumped like every other
 /// `device_policy` write, so the "changed since last sync" nudge story stays consistent even though
 /// this isn't going through the normal `update_policy` form save.
-async fn add_to_allowlist(state: &AppState, device_id: i64, package_name: &str) {
+pub(crate) async fn add_to_allowlist(state: &AppState, device_id: i64, package_name: &str) {
     let current: Option<String> =
         sqlx::query_scalar("SELECT allowlist_json FROM device_policy WHERE device_id = ?")
             .bind(device_id)
