@@ -156,6 +156,10 @@ struct UnifiedAppRow {
     /// `NotInstalled` row show live download progress ("Installing 42%") instead of the plain
     /// static label when a fresh `device_install_progress` row exists for it - see `view_device`.
     status_label: String,
+    /// True exactly when `status_label` carries a live percentage - drives device_detail.html's
+    /// self-polling reload (there's no push mechanism to this page, so it has to ask again) rather
+    /// than the template trying to parse `status_label`'s text back apart.
+    is_installing: bool,
     /// Precomputed rather than compared in the template (`status == AppRowStatus::NotInstalled`) -
     /// flags a catalog app that's checked but has nothing to actually push yet (no GitHub release
     /// synced, or a manual-upload app nobody's uploaded a build to yet). Selecting it used to
@@ -199,6 +203,10 @@ struct DeviceDetailTemplate {
     title: String,
     device: Device,
     apps: Vec<UnifiedAppRow>,
+    /// Precomputed rather than an `{% if %}` expression in the template - Askama's expression
+    /// grammar doesn't support closures, so `apps.iter().any(|a| a.is_installing)` can't be
+    /// written directly there.
+    any_app_installing: bool,
     pin_configured: bool,
     offline_override_used: bool,
     vpn_filter_enabled: bool,
@@ -303,6 +311,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             } else {
                 "Installed".to_string()
             },
+            is_installing: false,
             checked: allowed.contains(&app.package_name),
             tracked_app_id: tracked_match.map(|t| t.id),
             show_no_release_hint: false,
@@ -324,12 +333,14 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             continue;
         }
         let has_release = t.latest_release_tag.is_some();
-        let status_label = match install_progress.get(&t.id) {
+        let progress = install_progress.get(&t.id);
+        let status_label = match progress {
             Some(percent) => format!("Installing {percent}%"),
             None => "Not installed".to_string(),
         };
         apps.push(UnifiedAppRow {
             status_label,
+            is_installing: progress.is_some(),
             checked: selected_app_ids.contains(&t.id),
             tracked_app_id: Some(t.id),
             show_no_release_hint: !has_release,
@@ -350,6 +361,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             0,
             UnifiedAppRow {
                 status_label: "Installed".to_string(),
+                is_installing: false,
                 checked: true,
                 tracked_app_id: Some(launcher.id),
                 show_no_release_hint: false,
@@ -364,10 +376,12 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         .as_ref()
         .map(|s| s.offline_override_used)
         .unwrap_or(false);
+    let any_app_installing = apps.iter().any(|a| a.is_installing);
 
     Html(
         DeviceDetailTemplate {
             title: device.name.clone(),
+            any_app_installing,
             pin_configured: policy.override_pin_hash.is_some(),
             offline_override_used,
             vpn_filter_enabled: policy.vpn_filter_enabled,

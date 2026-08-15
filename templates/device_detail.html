@@ -77,7 +77,7 @@
                 <label class="checkbox-row">
                     <input type="checkbox" name="selected" {% if app.checked %}checked{% endif %} onchange="this.form.submit()">
                     {{ app.label }}
-                    <span class="app-status">{{ app.status_label }}</span>
+                    <span class="app-status" data-installing="{{ app.is_installing }}">{{ app.status_label }}</span>
                     {% if app.show_no_release_hint %} <span class="subtitle">(no release yet - won't install until one's added)</span>{% endif %}
                 </label>
             </form>
@@ -86,6 +86,17 @@
         </div>
         {% endif %}
     </div>
+
+    {% if any_app_installing %}
+    <script>
+        // Live progress has no push mechanism to this page - the server only ever gets a fresh
+        // percentage when the device reports one (see /api/devices/apps/progress), so this page
+        // has to poll for it. Only reloads while something here is actually installing - once
+        // nothing is, this block isn't rendered at all on the next load, so the polling stops
+        // itself rather than running forever on an otherwise-idle device page.
+        setTimeout(() => location.reload(), 3000);
+    </script>
+    {% endif %}
 
     <form method="post" action="/devices/{{ device.id }}/policy" class="card">
         <h2>Quick Controls (swipe-left screen)</h2>
