@@ -411,6 +411,45 @@ pub async fn status(
         }
     }
 
+    // Bootstraps a brand-new device's allowlist to a snapshot of whatever it reports installed on
+    // its very first heartbeat - kiosk_desired is mandatory for every device now (see
+    // handlers::devices), but engaging kiosk still requires a non-empty allowlist
+    // (AppEnforcer.apply's shouldEngageKiosk check client-side), so without this a freshly
+    // enrolled device would sit fully unpinned until an admin manually checked boxes on the Apps
+    // page. Only ever fires once per device - `allowlist_json` being non-null (even "[]") means an
+    // admin or an earlier toggle has already taken ownership of it, so this never overwrites a
+    // real, intentional selection.
+    if let Some(installed) = &report.installed_apps {
+        if !installed.is_empty() {
+            let allowlist_already_set = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT allowlist_json FROM device_policy WHERE device_id = ?",
+            )
+            .bind(device.id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .flatten()
+            .is_some();
+
+            if !allowlist_already_set {
+                let package_names: Vec<&str> =
+                    installed.iter().map(|a| a.package_name.as_str()).collect();
+                if let Ok(json) = serde_json::to_string(&package_names) {
+                    sqlx::query(
+                        "UPDATE device_policy SET allowlist_json = ?, updated_at = datetime('now') \
+                         WHERE device_id = ?",
+                    )
+                    .bind(&json)
+                    .bind(device.id)
+                    .execute(&state.db)
+                    .await
+                    .ok();
+                }
+            }
+        }
+    }
+
     // Attached on every regular heartbeat when the device has a location
     // reading available, not just after a `locate` command - see
     // LocationReport's doc comment. Pruned on a schedule (30 days) by

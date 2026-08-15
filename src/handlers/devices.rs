@@ -136,26 +136,52 @@ pub async fn regenerate_code(
     Redirect::to(&format!("/devices/{id}"))
 }
 
-struct AppCheckbox {
+/// One row in the unified Apps list - either an app the device has actually reported installed
+/// (`status` is `Preinstalled` or `Installed`), or a catalog (`tracked_apps`) app it doesn't have
+/// yet (`status` is `NotInstalled`). Replaces what used to be two separate lists/cards ("Allowed
+/// apps" from `device_status.installed_apps_json`, "Apps to install" from the full `tracked_apps`
+/// catalog) - an app that's both installed *and* in the catalog now gets exactly one row, not two
+/// independently-checkable ones telling two different, sometimes-contradictory stories.
+///
+/// `package_name` can be empty only for a manual-upload catalog app nobody's typed a package name
+/// for yet - it can never be matched against a real installed app by name, so it always shows as
+/// `NotInstalled` until an admin adds one (see `tracked_apps.rs`).
+struct UnifiedAppRow {
     package_name: String,
     label: String,
+    tracked_app_id: Option<i64>,
+    is_launcher: bool,
     checked: bool,
+    status: AppRowStatus,
+    /// Precomputed rather than compared in the template (`status == AppRowStatus::NotInstalled`) -
+    /// flags a catalog app that's checked but has nothing to actually push yet (no GitHub release
+    /// synced, or a manual-upload app nobody's uploaded a build to yet). Selecting it used to
+    /// silently do nothing until a release showed up, with no indication why.
+    show_no_release_hint: bool,
 }
 
-/// One row per app from the global Apps list (`tracked_apps`), scoped to whether *this* device
-/// gets it pushed - see migrations/0013_device_tracked_apps.sql. The launcher's own row is always
-/// `checked` and rendered disabled in device_detail.html (also enforced server-side - see
-/// `toggle_tracked_app`'s own doc comment) - there's no real-world case for a kid's phone not
-/// running the app that enforces every other restriction on it. `has_release` is surfaced so
-/// device_detail.html can flag an app that's checked but has nothing to actually push yet (no
-/// GitHub release synced, or a manual-upload app nobody's uploaded a build to yet) - selecting it
-/// used to silently do nothing until a release showed up, with no indication why.
-struct TrackedAppCheckbox {
-    id: i64,
-    name: String,
-    checked: bool,
-    is_launcher: bool,
-    has_release: bool,
+#[derive(PartialEq, Clone, Copy)]
+enum AppRowStatus {
+    /// Reported installed with `ApplicationInfo.FLAG_SYSTEM` set - can be suspended/hidden from
+    /// the kid but never actually uninstalled, so unchecking this row only ever disallows it.
+    Preinstalled,
+    /// Reported installed, not a system app - unchecking uninstalls it (if Device Owner has
+    /// privilege, which it does for any non-system app regardless of how it got there) as well as
+    /// disallowing it.
+    Installed,
+    /// Not currently reported installed - only ever a catalog (`tracked_apps`) app. Checking it
+    /// queues an install (if `has_release`) and allows it once the device confirms it's there.
+    NotInstalled,
+}
+
+impl AppRowStatus {
+    fn label(&self) -> &'static str {
+        match self {
+            AppRowStatus::Preinstalled => "Preinstalled",
+            AppRowStatus::Installed => "Installed",
+            AppRowStatus::NotInstalled => "Not installed",
+        }
+    }
 }
 
 /// The six parent-facing LockTask features, decoded from/encoded into the
@@ -193,8 +219,7 @@ const QUICK_CONTROL_BRIGHTNESS: i64 = 4;
 struct DeviceDetailTemplate {
     title: String,
     device: Device,
-    apps: Vec<AppCheckbox>,
-    tracked_apps: Vec<TrackedAppCheckbox>,
+    apps: Vec<UnifiedAppRow>,
     pin_configured: bool,
     offline_override_used: bool,
     vpn_filter_enabled: bool,
@@ -254,15 +279,6 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         .and_then(|j| serde_json::from_str(j).ok())
         .unwrap_or_default();
 
-    let apps = installed
-        .into_iter()
-        .map(|a| AppCheckbox {
-            checked: allowed.contains(&a.package_name),
-            package_name: a.package_name,
-            label: a.label,
-        })
-        .collect();
-
     let all_tracked = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps ORDER BY name")
         .fetch_all(&state.db)
         .await
@@ -275,16 +291,75 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             .unwrap_or_default()
             .into_iter()
             .collect();
-    let tracked_apps = all_tracked
-        .into_iter()
-        .map(|a| TrackedAppCheckbox {
-            checked: a.is_launcher || selected_app_ids.contains(&a.id),
-            id: a.id,
-            name: a.name,
-            is_launcher: a.is_launcher,
-            has_release: a.latest_release_tag.is_some(),
-        })
-        .collect();
+
+    let mut apps: Vec<UnifiedAppRow> = Vec::new();
+    let mut seen_packages: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // First pass: every app the device actually reports installed (preinstalled or otherwise),
+    // matched against the catalog by package name where possible so an app that's both installed
+    // *and* trackable still gets exactly one row.
+    for app in &installed {
+        let tracked_match = all_tracked
+            .iter()
+            .find(|t| !t.package_name.is_empty() && t.package_name == app.package_name);
+        apps.push(UnifiedAppRow {
+            status: if app.preinstalled {
+                AppRowStatus::Preinstalled
+            } else {
+                AppRowStatus::Installed
+            },
+            checked: allowed.contains(&app.package_name),
+            tracked_app_id: tracked_match.map(|t| t.id),
+            show_no_release_hint: false,
+            package_name: app.package_name.clone(),
+            label: app.label.clone(),
+            is_launcher: false,
+        });
+        seen_packages.insert(app.package_name.clone());
+    }
+
+    // Second pass: catalog apps not currently installed (including manual-upload apps with no
+    // package name typed yet, which can never match an installed app by name) - the launcher's
+    // own row is handled separately below, it never belongs here.
+    for t in &all_tracked {
+        if t.is_launcher {
+            continue;
+        }
+        if !t.package_name.is_empty() && seen_packages.contains(&t.package_name) {
+            continue;
+        }
+        let has_release = t.latest_release_tag.is_some();
+        apps.push(UnifiedAppRow {
+            status: AppRowStatus::NotInstalled,
+            checked: selected_app_ids.contains(&t.id),
+            tracked_app_id: Some(t.id),
+            show_no_release_hint: !has_release,
+            package_name: t.package_name.clone(),
+            label: t.name.clone(),
+            is_launcher: false,
+        });
+    }
+
+    apps.sort_by(|a, b| a.label.to_lowercase().cmp(&b.label.to_lowercase()));
+
+    // The launcher's own row is pinned first rather than sorted alphabetically with everything
+    // else - it's not really "one app among many" the way the rest of this list is, it's the
+    // thing enforcing the rest of this list, so calling that out up top reads better than letting
+    // it land wherever its name happens to sort.
+    if let Some(launcher) = all_tracked.iter().find(|t| t.is_launcher) {
+        apps.insert(
+            0,
+            UnifiedAppRow {
+                status: AppRowStatus::Installed,
+                checked: true,
+                tracked_app_id: Some(launcher.id),
+                show_no_release_hint: false,
+                package_name: launcher.package_name.clone(),
+                label: launcher.name.clone(),
+                is_launcher: true,
+            },
+        );
+    }
 
     let offline_override_used = latest_status
         .as_ref()
@@ -302,7 +377,6 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             quick_control_brightness: policy.quick_controls_mask & QUICK_CONTROL_BRIGHTNESS != 0,
             device,
             apps,
-            tracked_apps,
             latest_status,
         }
         .render()
@@ -311,72 +385,82 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
     .into_response()
 }
 
-/// Flips whether one tracked app is pushed to one device - a standalone auto-submitting toggle
-/// (see device_detail.html's "Apps to install" card), not folded into the big `update_policy` form
-/// like the rest of a device's settings. Deliberately different from that form's "edit several
-/// things, then click Save" pattern - live testing showed an admin checking one of these boxes and
-/// *not* separately scrolling down to hit the unrelated form's Save button, since every other
-/// on/off switch in this app (tracked_apps.rs's `set_enabled`/`set_include_prereleases`, this
-/// file's own quick-toggles elsewhere) already auto-saves on change. The launcher's own row never
+/// Flips one row of the unified Apps list for one device - a standalone auto-submitting toggle
+/// (see device_detail.html), not folded into the big `update_policy` form like the rest of a
+/// device's settings. Deliberately different from that form's "edit several things, then click
+/// Save" pattern - live testing (back when this was two separate lists) showed an admin checking
+/// a box and *not* separately scrolling down to hit an unrelated form's Save button, since every
+/// other on/off switch in this app already auto-saves on change. The launcher's own row never
 /// reaches this handler - its checkbox in the template is `disabled`, and a disabled control can't
 /// be interacted with to submit a request in the first place.
 ///
-/// Checking and unchecking are symmetric now, both keyed on the tracked app's package name (a
-/// no-op either direction without one on file - see tracked_apps.rs's create/update handlers):
-/// checking adds it to the allowlist so a kiosk-mode device doesn't have it pushed-but-invisible
-/// until a second manual step; unchecking removes it from the allowlist *and* queues a silent
-/// uninstall (`device_pending_uninstalls`) if the device currently reports it installed. Confirmed
-/// live this is what an admin actually wants from "uncheck this app" - not "stop pushing updates
-/// but leave it on the phone."
-pub async fn toggle_tracked_app(
+/// Takes both `package_name` and `tracked_app_id` as (independently optional) form fields rather
+/// than a single path-scoped id, since a row here might be catalog-only (no package name on file
+/// yet), install-only (a preinstalled or otherwise-installed app never added to the catalog), or
+/// both - see `UnifiedAppRow`'s own doc comment. At least one is expected to be present; a toggle
+/// with neither is a no-op.
+///
+/// Checking: adds the `device_tracked_apps` row if there's a catalog entry to track (so a
+/// not-yet-installed app actually gets pushed, and an already-installed one starts picking up
+/// future updates), and allows the package if there's one on file - both no-ops if already in
+/// that state.
+///
+/// Unchecking: removes the `device_tracked_apps` row and disallows the package the same way.
+/// Whether it *also* queues a silent uninstall depends on current on-device status - a preinstalled
+/// app can never actually be uninstalled (only suspended/hidden), so that step is skipped entirely
+/// for one; any other currently-installed package gets queued via `device_pending_uninstalls`,
+/// same as before this was generalized from tracked-apps-only.
+pub async fn toggle_app(
     State(state): State<AppState>,
-    Path((id, app_id)): Path<(i64, i64)>,
+    Path(id): Path<i64>,
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
-        .bind(app_id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
+    let checked = form.contains_key("selected");
+    let package_name = form
+        .get("package_name")
+        .map(String::as_str)
+        .unwrap_or("")
+        .to_string();
+    let tracked_app_id: Option<i64> = form.get("tracked_app_id").and_then(|s| s.parse().ok());
 
-    if form.contains_key("selected") {
-        sqlx::query(
-            "INSERT OR IGNORE INTO device_tracked_apps (device_id, tracked_app_id) VALUES (?, ?)",
-        )
-        .bind(id)
-        .bind(app_id)
-        .execute(&state.db)
-        .await
-        .ok();
-
-        if let Some(app) = &app {
-            if !app.package_name.is_empty() {
-                add_to_allowlist(&state, id, &app.package_name).await;
-            }
-        }
-    } else {
-        sqlx::query("DELETE FROM device_tracked_apps WHERE device_id = ? AND tracked_app_id = ?")
+    if checked {
+        if let Some(tid) = tracked_app_id {
+            sqlx::query(
+                "INSERT OR IGNORE INTO device_tracked_apps (device_id, tracked_app_id) VALUES (?, ?)",
+            )
             .bind(id)
-            .bind(app_id)
+            .bind(tid)
             .execute(&state.db)
             .await
             .ok();
-
-        if let Some(app) = &app {
-            if !app.package_name.is_empty() {
-                remove_from_allowlist(&state, id, &app.package_name).await;
-                if is_installed_on_device(&state, id, &app.package_name).await {
-                    sqlx::query(
-                        "INSERT OR IGNORE INTO device_pending_uninstalls (device_id, package_name) \
-                         VALUES (?, ?)",
-                    )
-                    .bind(id)
-                    .bind(&app.package_name)
-                    .execute(&state.db)
-                    .await
-                    .ok();
-                }
+        }
+        if !package_name.is_empty() {
+            add_to_allowlist(&state, id, &package_name).await;
+        }
+    } else {
+        if let Some(tid) = tracked_app_id {
+            sqlx::query(
+                "DELETE FROM device_tracked_apps WHERE device_id = ? AND tracked_app_id = ?",
+            )
+            .bind(id)
+            .bind(tid)
+            .execute(&state.db)
+            .await
+            .ok();
+        }
+        if !package_name.is_empty() {
+            remove_from_allowlist(&state, id, &package_name).await;
+            let (installed, preinstalled) = installed_app_status(&state, id, &package_name).await;
+            if installed && !preinstalled {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO device_pending_uninstalls (device_id, package_name) \
+                     VALUES (?, ?)",
+                )
+                .bind(id)
+                .bind(&package_name)
+                .execute(&state.db)
+                .await
+                .ok();
             }
         }
     }
@@ -385,10 +469,15 @@ pub async fn toggle_tracked_app(
     Redirect::to(&format!("/devices/{id}"))
 }
 
-/// Whether the device's most recent status report lists this package as installed - gates queuing
-/// an uninstall in [toggle_tracked_app], since there's nothing to uninstall otherwise (and no harm
-/// either way; the client silently no-ops uninstalling an already-absent package).
-async fn is_installed_on_device(state: &AppState, device_id: i64, package_name: &str) -> bool {
+/// Whether the device's most recent status report lists this package as installed, and if so,
+/// whether it was reported as a preinstalled (`ApplicationInfo.FLAG_SYSTEM`) app - gates both
+/// whether [toggle_app] has anything to uninstall at all, and whether it should even try (a
+/// preinstalled app can only ever be suspended/hidden, never actually removed).
+async fn installed_app_status(
+    state: &AppState,
+    device_id: i64,
+    package_name: &str,
+) -> (bool, bool) {
     let json: Option<String> = sqlx::query_scalar(
         "SELECT installed_apps_json FROM device_status WHERE device_id = ? \
          ORDER BY reported_at DESC LIMIT 1",
@@ -402,11 +491,14 @@ async fn is_installed_on_device(state: &AppState, device_id: i64, package_name: 
         .as_deref()
         .and_then(|j| serde_json::from_str(j).ok())
         .unwrap_or_default();
-    installed.iter().any(|a| a.package_name == package_name)
+    match installed.iter().find(|a| a.package_name == package_name) {
+        Some(a) => (true, a.preinstalled),
+        None => (false, false),
+    }
 }
 
 /// Adds one package to a device's allowlist if it isn't already there. Used by
-/// [toggle_tracked_app] - see its own doc comment for why. `updated_at` is bumped like every other
+/// [toggle_app] - see its own doc comment for why. `updated_at` is bumped like every other
 /// `device_policy` write, so the "changed since last sync" nudge story stays consistent even though
 /// this isn't going through the normal `update_policy` form save.
 async fn add_to_allowlist(state: &AppState, device_id: i64, package_name: &str) {
@@ -443,7 +535,7 @@ async fn add_to_allowlist(state: &AppState, device_id: i64, package_name: &str) 
 }
 
 /// Removes one package from a device's allowlist if present - the uncheck-side counterpart to
-/// [add_to_allowlist], used by [toggle_tracked_app].
+/// [add_to_allowlist], used by [toggle_app].
 async fn remove_from_allowlist(state: &AppState, device_id: i64, package_name: &str) {
     let current: Option<String> =
         sqlx::query_scalar("SELECT allowlist_json FROM device_policy WHERE device_id = ?")
@@ -478,95 +570,18 @@ async fn remove_from_allowlist(state: &AppState, device_id: i64, package_name: &
     .ok();
 }
 
-/// Repeated `allowed_packages` checkbox values can't be collected into a
-/// `Vec<String>` via axum's built-in `Form` extractor (it deserializes each
-/// key as a single scalar, so a form with one or more identically-named
-/// fields fails with "expected a sequence") - parsed manually instead.
+/// Handles everything on a device's page *except* the Apps list, which is now its own set of
+/// per-row [toggle_app] saves - this form used to also carry "Allowed apps" checkboxes, which
+/// needed the allowlist-reconciliation dance now gone from here entirely (see git history if that
+/// logic is ever needed for reference). `Form<HashMap<...>>` is safe to use directly again now
+/// that nothing here is a repeated-name checkbox group.
 pub async fn update_policy(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Extension(CurrentAdmin(admin)): Extension<CurrentAdmin>,
-    body: axum::body::Bytes,
+    Form(fields): Form<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let mut allowed_packages = Vec::new();
-    let mut fields: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for (key, value) in form_urlencoded::parse(&body) {
-        if key == "allowed_packages" {
-            allowed_packages.push(value.into_owned());
-        } else {
-            fields.insert(key.into_owned(), value.into_owned());
-        }
-    }
     let field = |k: &str| fields.get(k).cloned().unwrap_or_default();
-
-    // The "Allowed apps" checkboxes on device_detail.html only ever render one row per package the
-    // device has actually reported installed (see view_device's `apps`) - so a package that's on
-    // the allowlist but not yet installed (e.g. just auto-added by toggle_tracked_app's
-    // add_to_allowlist, ahead of the device actually installing it) was never an option on this
-    // page and can't have been in the submitted `allowed_packages` list either way. Naively trusting
-    // that submitted list as the complete new allowlist would silently drop it - any unrelated
-    // save (schedule, WiFi mode, whatever) in the window before the device installs and reports
-    // back would erase the pre-authorization.
-    //
-    // Only preserve entries that are *actually* pending like that - a package name belonging to a
-    // tracked app still selected for this device (`device_tracked_apps`) that the device hasn't
-    // yet reported as installed. Preserving every not-rendered package unconditionally was tried
-    // first and was wrong: it also protects a package that WAS installed and allowed, then got
-    // uninstalled (by the kid, or any other way) - that package's checkbox simply stops rendering,
-    // so it could never be unchecked again either, and would silently regain kiosk access if ever
-    // reinstalled without the admin re-approving it. Restricting the preserve-list to genuinely
-    // pending tracked-app installs keeps the original self-cleaning behavior for everything else -
-    // an allowed-but-no-longer-installed package still falls out of the allowlist on the next save,
-    // same as before this whole pending-preserve mechanism existed.
-    let installed_packages: std::collections::HashSet<String> = {
-        let json: Option<String> = sqlx::query_scalar(
-            "SELECT installed_apps_json FROM device_status WHERE device_id = ? \
-             ORDER BY reported_at DESC LIMIT 1",
-        )
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
-        let installed: Vec<InstalledApp> = json
-            .as_deref()
-            .and_then(|j| serde_json::from_str(j).ok())
-            .unwrap_or_default();
-        installed.into_iter().map(|a| a.package_name).collect()
-    };
-    let current_allowlist: Vec<String> = {
-        let json: Option<String> =
-            sqlx::query_scalar("SELECT allowlist_json FROM device_policy WHERE device_id = ?")
-                .bind(id)
-                .fetch_optional(&state.db)
-                .await
-                .ok()
-                .flatten();
-        json.as_deref()
-            .and_then(|j| serde_json::from_str(j).ok())
-            .unwrap_or_default()
-    };
-    let pending_tracked_packages: std::collections::HashSet<String> = sqlx::query_scalar(
-        "SELECT ta.package_name FROM tracked_apps ta \
-         JOIN device_tracked_apps dta ON dta.tracked_app_id = ta.id \
-         WHERE dta.device_id = ? AND ta.package_name != ''",
-    )
-    .bind(id)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default()
-    .into_iter()
-    .collect();
-    let mut final_allowed = allowed_packages.clone();
-    for pkg in current_allowlist {
-        if !installed_packages.contains(&pkg)
-            && !final_allowed.contains(&pkg)
-            && pending_tracked_packages.contains(&pkg)
-        {
-            final_allowed.push(pkg);
-        }
-    }
-    let allowlist_json = serde_json::to_string(&final_allowed).ok();
 
     // Home, status bar info, recents, notifications, and the power button menu don't let a kid
     // reach anything outside the pinned/allowed app set - Home just re-navigates within it,
@@ -648,12 +663,11 @@ pub async fn update_policy(
     }
 
     sqlx::query(
-        "UPDATE device_policy SET allowlist_json = ?, kiosk_desired = 1, \
+        "UPDATE device_policy SET kiosk_desired = 1, \
          lock_task_features = ?, override_pin_hash = ?, override_pin_salt = ?, \
          quick_controls_mask = ?, vpn_filter_enabled = ?, \
          updated_at = datetime('now') WHERE device_id = ?",
     )
-    .bind(&allowlist_json)
     .bind(lock_task_features)
     .bind(&override_pin_hash)
     .bind(&override_pin_salt)

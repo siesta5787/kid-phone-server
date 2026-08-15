@@ -494,6 +494,16 @@ th {
     margin-bottom: 16px;
 }
 
+.app-status {
+    margin-left: auto;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--color-border);
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
 .schedule-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;

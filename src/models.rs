@@ -210,10 +210,19 @@ pub struct DeviceCommand {
 /// One entry in a device's self-reported installed-app list, used to build
 /// the admin UI's allowlist checkboxes from real data instead of asking a
 /// parent to type raw Android package names.
+///
+/// `preinstalled` mirrors the client's own `ApplicationInfo.FLAG_SYSTEM` check (already used
+/// there to decide what's controllable at all - see `controllablePackages()`) - it's what lets
+/// the unified Apps list tell "can't be uninstalled, only suspended" apps apart from ones this
+/// server pushed itself. `#[serde(default)]` since old `device_status.installed_apps_json` rows
+/// (an append-only log) predate this field and won't have it - they should read as `false`, not
+/// fail to deserialize.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct InstalledApp {
     pub package_name: String,
     pub label: String,
+    #[serde(default)]
+    pub preinstalled: bool,
 }
 
 // ---------------------------------------------------------------------

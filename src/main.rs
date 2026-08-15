@@ -225,8 +225,8 @@ async fn main() {
             post(handlers::tracked_apps::delete_tracked_app),
         )
         .route(
-            "/devices/{id}/apps/{app_id}/toggle",
-            post(handlers::devices::toggle_tracked_app),
+            "/devices/{id}/apps/toggle",
+            post(handlers::devices::toggle_app),
         )
         .route("/dns", get(handlers::dns_filter::show_dns_filter))
         .route("/dns/upstream", post(handlers::dns_filter::set_upstream))

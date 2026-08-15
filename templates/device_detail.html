@@ -55,23 +55,30 @@
     </div>
 
     <div class="card">
-        <h2>Apps to install</h2>
-        <p class="subtitle">Which apps from the <a href="/apps">Apps</a> list get pushed to this device. Adding an app there doesn't install it anywhere until it's checked here for a specific device. Each checkbox saves itself immediately - no separate Save button.</p>
-        {% if tracked_apps.is_empty() %}
-        <p class="subtitle">No apps tracked yet - add one from the <a href="/apps">Apps</a> tab first.</p>
+        <h2>Apps</h2>
+        <p class="subtitle">Every app currently on this device, plus anything from the <a href="/apps">Apps</a> catalog it doesn't have yet. Checking a preinstalled or already-installed app allows it; checking one that isn't installed installs and allows it. Unchecking disallows it - and uninstalls it too, unless it's preinstalled and can't be removed. Each checkbox saves itself immediately - no separate Save button.</p>
+        {% if apps.is_empty() %}
+        <p class="subtitle">Nothing to show yet - the phone hasn't reported its installed apps, and nothing's been added to the <a href="/apps">Apps</a> catalog either.</p>
         {% else %}
         <div class="app-checkbox-list">
-            {% for app in tracked_apps %}
+            {% for app in apps %}
             {% if app.is_launcher %}
             <label class="checkbox-row">
                 <input type="checkbox" checked disabled>
-                {{ app.name }} (launcher - always installed)
+                {{ app.label }} (launcher - always installed)
+                <span class="app-status">{{ app.status.label() }}</span>
             </label>
             {% else %}
-            <form method="post" action="/devices/{{ device.id }}/apps/{{ app.id }}/toggle">
+            <form method="post" action="/devices/{{ device.id }}/apps/toggle">
+                <input type="hidden" name="package_name" value="{{ app.package_name }}">
+                {% if let Some(tracked_app_id) = app.tracked_app_id %}
+                <input type="hidden" name="tracked_app_id" value="{{ tracked_app_id }}">
+                {% endif %}
                 <label class="checkbox-row">
                     <input type="checkbox" name="selected" {% if app.checked %}checked{% endif %} onchange="this.form.submit()">
-                    {{ app.name }}{% if !app.has_release %} <span class="subtitle">(no release yet - won't install until one's added)</span>{% endif %}
+                    {{ app.label }}
+                    <span class="app-status">{{ app.status.label() }}</span>
+                    {% if app.show_no_release_hint %} <span class="subtitle">(no release yet - won't install until one's added)</span>{% endif %}
                 </label>
             </form>
             {% endif %}
@@ -81,20 +88,6 @@
     </div>
 
     <form method="post" action="/devices/{{ device.id }}/policy" class="card">
-        <h2>Allowed apps</h2>
-        {% if apps.is_empty() %}
-        <p class="subtitle">The phone hasn't reported its installed apps yet - once it does, they'll show up here to choose from.</p>
-        {% else %}
-        <div class="app-checkbox-list">
-            {% for app in apps %}
-            <label class="checkbox-row">
-                <input type="checkbox" name="allowed_packages" value="{{ app.package_name }}" {% if app.checked %}checked{% endif %}>
-                {{ app.label }}
-            </label>
-            {% endfor %}
-        </div>
-        {% endif %}
-
         <h2>Quick Controls (swipe-left screen)</h2>
         <p class="subtitle">These appear on a screen the kid can reach by swiping left from the home screen. This is the intended way for a kid to reach these controls instead of Android's own Quick Settings shade, which can't be fully locked down - a third-party app can publish its own tile there (Tailscale does) that bypasses restrictions below.</p>
         <label class="checkbox-row">
