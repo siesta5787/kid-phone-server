@@ -66,7 +66,7 @@
             <label class="checkbox-row">
                 <input type="checkbox" checked disabled>
                 {{ app.label }} (launcher - always installed)
-                <span class="app-status">{{ app.status.label() }}</span>
+                <span class="app-status">{{ app.status_label }}</span>
             </label>
             {% else %}
             <form method="post" action="/devices/{{ device.id }}/apps/toggle">
@@ -77,7 +77,7 @@
                 <label class="checkbox-row">
                     <input type="checkbox" name="selected" {% if app.checked %}checked{% endif %} onchange="this.form.submit()">
                     {{ app.label }}
-                    <span class="app-status">{{ app.status.label() }}</span>
+                    <span class="app-status">{{ app.status_label }}</span>
                     {% if app.show_no_release_hint %} <span class="subtitle">(no release yet - won't install until one's added)</span>{% endif %}
                 </label>
             </form>

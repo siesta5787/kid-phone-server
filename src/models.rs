@@ -320,6 +320,14 @@ pub struct CommandResultRequest {
     pub message: Option<String>,
 }
 
+/// Reported by the device during a tracked app's download - see
+/// migrations/0019_device_install_progress.sql and `handlers::device_api::install_progress`.
+#[derive(Deserialize)]
+pub struct InstallProgressReport {
+    pub tracked_app_id: i64,
+    pub percent: i64,
+}
+
 /// One blocked-domain event as reported by the device - see
 /// `POST /api/devices/dns-events` and migrations/0011_client_side_dns_filtering.sql.
 /// The client already knows which category caused the block (it evaluated

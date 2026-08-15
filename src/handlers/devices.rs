@@ -152,36 +152,15 @@ struct UnifiedAppRow {
     tracked_app_id: Option<i64>,
     is_launcher: bool,
     checked: bool,
-    status: AppRowStatus,
+    /// Precomputed display text rather than a template-side call to `status.label()` - lets a
+    /// `NotInstalled` row show live download progress ("Installing 42%") instead of the plain
+    /// static label when a fresh `device_install_progress` row exists for it - see `view_device`.
+    status_label: String,
     /// Precomputed rather than compared in the template (`status == AppRowStatus::NotInstalled`) -
     /// flags a catalog app that's checked but has nothing to actually push yet (no GitHub release
     /// synced, or a manual-upload app nobody's uploaded a build to yet). Selecting it used to
     /// silently do nothing until a release showed up, with no indication why.
     show_no_release_hint: bool,
-}
-
-#[derive(PartialEq, Clone, Copy)]
-enum AppRowStatus {
-    /// Reported installed with `ApplicationInfo.FLAG_SYSTEM` set - can be suspended/hidden from
-    /// the kid but never actually uninstalled, so unchecking this row only ever disallows it.
-    Preinstalled,
-    /// Reported installed, not a system app - unchecking uninstalls it (if Device Owner has
-    /// privilege, which it does for any non-system app regardless of how it got there) as well as
-    /// disallowing it.
-    Installed,
-    /// Not currently reported installed - only ever a catalog (`tracked_apps`) app. Checking it
-    /// queues an install (if `has_release`) and allows it once the device confirms it's there.
-    NotInstalled,
-}
-
-impl AppRowStatus {
-    fn label(&self) -> &'static str {
-        match self {
-            AppRowStatus::Preinstalled => "Preinstalled",
-            AppRowStatus::Installed => "Installed",
-            AppRowStatus::NotInstalled => "Not installed",
-        }
-    }
 }
 
 /// The six parent-facing LockTask features, decoded from/encoded into the
@@ -292,6 +271,22 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             .into_iter()
             .collect();
 
+    // Fresh (not stale) download-progress rows for this device - only ever meaningful for a
+    // NotInstalled row below, so this is the only place they're consulted. The 10-minute window
+    // matches the client's own in-flight-attempt timeout (TrackedAppUpdateState) for consistency -
+    // long enough to cover a slow download, short enough that an abandoned attempt's last-reported
+    // percentage doesn't linger looking "in progress" forever.
+    let install_progress: std::collections::HashMap<i64, i64> = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT tracked_app_id, percent FROM device_install_progress \
+         WHERE device_id = ? AND updated_at > datetime('now', '-10 minutes')",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .collect();
+
     let mut apps: Vec<UnifiedAppRow> = Vec::new();
     let mut seen_packages: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -303,10 +298,10 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             .iter()
             .find(|t| !t.package_name.is_empty() && t.package_name == app.package_name);
         apps.push(UnifiedAppRow {
-            status: if app.preinstalled {
-                AppRowStatus::Preinstalled
+            status_label: if app.preinstalled {
+                "Preinstalled".to_string()
             } else {
-                AppRowStatus::Installed
+                "Installed".to_string()
             },
             checked: allowed.contains(&app.package_name),
             tracked_app_id: tracked_match.map(|t| t.id),
@@ -329,8 +324,12 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             continue;
         }
         let has_release = t.latest_release_tag.is_some();
+        let status_label = match install_progress.get(&t.id) {
+            Some(percent) => format!("Installing {percent}%"),
+            None => "Not installed".to_string(),
+        };
         apps.push(UnifiedAppRow {
-            status: AppRowStatus::NotInstalled,
+            status_label,
             checked: selected_app_ids.contains(&t.id),
             tracked_app_id: Some(t.id),
             show_no_release_hint: !has_release,
@@ -350,7 +349,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         apps.insert(
             0,
             UnifiedAppRow {
-                status: AppRowStatus::Installed,
+                status_label: "Installed".to_string(),
                 checked: true,
                 tracked_app_id: Some(launcher.id),
                 show_no_release_hint: false,

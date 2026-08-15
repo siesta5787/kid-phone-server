@@ -371,6 +371,10 @@ async fn main() {
             get(handlers::device_api::tracked_app_download),
         )
         .route(
+            "/api/devices/apps/progress",
+            post(handlers::device_api::install_progress),
+        )
+        .route(
             "/api/devices/dns-blocklist",
             get(handlers::device_api::dns_blocklist),
         )
