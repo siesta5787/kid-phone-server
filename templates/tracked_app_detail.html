@@ -24,9 +24,6 @@
             <label for="name">Name</label>
             <input type="text" id="name" name="name" value="{{ app.name }}" required>
 
-            <label for="package_name">Android package name (optional)</label>
-            <input type="text" id="package_name" name="package_name" value="{{ app.package_name }}" placeholder="e.g. com.tailscale.ipn">
-
             {% if app.source_type == "github" %}
             <label for="github_repo">GitHub repo</label>
             <input type="text" id="github_repo" name="github_repo" value="{{ app.github_repo }}" placeholder="e.g. tailscale/tailscale-android">
@@ -51,6 +48,14 @@
         <p>Current synced release: <strong>{{ tag }}</strong></p>
         {% else %}
         <p class="subtitle">No release synced yet.</p>
+        {% endif %}
+        {% if app.package_name.is_empty() %}
+        <p class="subtitle">Android package: not detected yet - fills in automatically the first time a device reports this app newly installed.</p>
+        {% else %}
+        <p>Android package: <strong>{{ app.package_name }}</strong> <span class="subtitle">(detected automatically, not typed in)</span></p>
+        <form method="post" action="/apps/tracked/{{ app.id }}/forget-package-name" style="display:inline;">
+            <button type="submit" class="button-secondary">Wrong app? Forget detected package</button>
+        </form>
         {% endif %}
         {% if let Some(checked) = app.last_checked_at %}
         <p class="subtitle">Last checked {{ checked }}</p>

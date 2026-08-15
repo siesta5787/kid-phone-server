@@ -160,6 +160,10 @@ struct UnifiedAppRow {
     /// self-polling reload (there's no push mechanism to this page, so it has to ask again) rather
     /// than the template trying to parse `status_label`'s text back apart.
     is_installing: bool,
+    /// True when the device reported a failed install attempt for this app that hasn't cleared yet
+    /// (see `device_install_progress.failed`) - a separate flag from `is_installing` so
+    /// device_detail.html can style it distinctly rather than parsing `status_label`'s text.
+    install_failed: bool,
     /// Precomputed rather than compared in the template (`status == AppRowStatus::NotInstalled`) -
     /// flags a catalog app that's checked but has nothing to actually push yet (no GitHub release
     /// synced, or a manual-upload app nobody's uploaded a build to yet). Selecting it used to
@@ -284,16 +288,18 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
     // matches the client's own in-flight-attempt timeout (TrackedAppUpdateState) for consistency -
     // long enough to cover a slow download, short enough that an abandoned attempt's last-reported
     // percentage doesn't linger looking "in progress" forever.
-    let install_progress: std::collections::HashMap<i64, i64> = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT tracked_app_id, percent FROM device_install_progress \
-         WHERE device_id = ? AND updated_at > datetime('now', '-10 minutes')",
-    )
-    .bind(id)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default()
-    .into_iter()
-    .collect();
+    let install_progress: std::collections::HashMap<i64, (i64, bool)> =
+        sqlx::query_as::<_, (i64, i64, bool)>(
+            "SELECT tracked_app_id, percent, failed FROM device_install_progress \
+             WHERE device_id = ? AND updated_at > datetime('now', '-10 minutes')",
+        )
+        .bind(id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(tracked_app_id, percent, failed)| (tracked_app_id, (percent, failed)))
+        .collect();
 
     let mut apps: Vec<UnifiedAppRow> = Vec::new();
     let mut seen_packages: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -312,6 +318,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
                 "Installed".to_string()
             },
             is_installing: false,
+            install_failed: false,
             checked: allowed.contains(&app.package_name),
             tracked_app_id: tracked_match.map(|t| t.id),
             show_no_release_hint: false,
@@ -333,14 +340,16 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             continue;
         }
         let has_release = t.latest_release_tag.is_some();
-        let progress = install_progress.get(&t.id);
-        let status_label = match progress {
-            Some(percent) => format!("Installing {percent}%"),
-            None => "Not installed".to_string(),
+        let progress = install_progress.get(&t.id).copied();
+        let (status_label, is_installing, install_failed) = match progress {
+            Some((_, true)) => ("Install failed".to_string(), false, true),
+            Some((percent, false)) => (format!("Installing {percent}%"), true, false),
+            None => ("Not installed".to_string(), false, false),
         };
         apps.push(UnifiedAppRow {
             status_label,
-            is_installing: progress.is_some(),
+            is_installing,
+            install_failed,
             checked: selected_app_ids.contains(&t.id),
             tracked_app_id: Some(t.id),
             show_no_release_hint: !has_release,
@@ -362,6 +371,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             UnifiedAppRow {
                 status_label: "Installed".to_string(),
                 is_installing: false,
+                install_failed: false,
                 checked: true,
                 tracked_app_id: Some(launcher.id),
                 show_no_release_hint: false,

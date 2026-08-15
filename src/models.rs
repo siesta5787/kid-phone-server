@@ -320,12 +320,17 @@ pub struct CommandResultRequest {
     pub message: Option<String>,
 }
 
-/// Reported by the device during a tracked app's download - see
-/// migrations/0019_device_install_progress.sql and `handlers::device_api::install_progress`.
+/// Reported by the device during a tracked app's download, or once if the install ultimately
+/// fails - see migrations/0019_device_install_progress.sql, 0020_device_install_failed.sql, and
+/// `handlers::device_api::install_progress`. `percent` is meaningless when `failed` is true (the
+/// device sends 0); kept as a plain required field rather than `Option` since every call site
+/// already has a value on hand either way.
 #[derive(Deserialize)]
 pub struct InstallProgressReport {
     pub tracked_app_id: i64,
     pub percent: i64,
+    #[serde(default)]
+    pub failed: bool,
 }
 
 /// One blocked-domain event as reported by the device - see

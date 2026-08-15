@@ -276,12 +276,14 @@ pub async fn create_tracked_app(
     };
     let include_prereleases = source_type == "github" && fields.contains_key("include_prereleases");
 
+    // package_name is never taken from admin input (see update_tracked_app's own doc comment) -
+    // a brand-new app can't have one known yet anyway, since nothing's been installed to detect
+    // it from. Always starts empty; device_api::status backfills it automatically.
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO tracked_apps (name, package_name, source_type, github_repo, asset_pattern, include_prereleases) \
-         VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+         VALUES (?, '', ?, ?, ?, ?) RETURNING id",
     )
     .bind(field("name").trim())
-    .bind(field("package_name").trim())
     .bind(source_type)
     .bind(&github_repo)
     .bind(&asset_pattern)
@@ -465,7 +467,6 @@ pub async fn update_tracked_app(
 
     let field = |k: &str| fields.get(k).cloned().unwrap_or_default();
     let name = field("name").trim().to_string();
-    let package_name = field("package_name").trim().to_string();
 
     let (github_repo, asset_pattern) = if app.source_type == "github" {
         let repo = normalize_github_repo(field("github_repo").trim());
@@ -475,12 +476,18 @@ pub async fn update_tracked_app(
         (app.github_repo.clone(), app.asset_pattern.clone())
     };
 
+    // package_name is deliberately not editable here - it used to be free text ("Android package
+    // name (optional)"), and a typo or a missed applicationIdSuffix (confirmed live: the browser
+    // fork's real installed package is com.kidsmdm.browser.debug, not the com.kidsmdm.browser an
+    // admin reasonably typed) silently broke the unified Apps list's matching with no obvious
+    // cause. device_api::status now backfills it automatically the moment a device reports the
+    // real package - see that handler's own doc comment - so there's no longer a reason for a
+    // human to type it at all. forget_package_name below is the escape hatch if it's ever
+    // detected wrong.
     sqlx::query(
-        "UPDATE tracked_apps SET name = ?, package_name = ?, github_repo = ?, asset_pattern = ? \
-         WHERE id = ?",
+        "UPDATE tracked_apps SET name = ?, github_repo = ?, asset_pattern = ? WHERE id = ?",
     )
     .bind(&name)
-    .bind(&package_name)
     .bind(&github_repo)
     .bind(&asset_pattern)
     .bind(id)
@@ -523,6 +530,23 @@ pub async fn set_enabled(
     let enabled = form.contains_key("enabled");
     sqlx::query("UPDATE tracked_apps SET enabled = ? WHERE id = ?")
         .bind(enabled)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    Redirect::to(&format!("/apps/tracked/{id}"))
+}
+
+/// Resets a wrongly-detected package name back to empty, letting device_api::status's
+/// auto-backfill try again from the next device that reports this app newly installed - the
+/// escape hatch for update_tracked_app no longer accepting manual package name entry at all (see
+/// that handler's own doc comment for why).
+pub async fn forget_package_name(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    sqlx::query("UPDATE tracked_apps SET package_name = '' WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await

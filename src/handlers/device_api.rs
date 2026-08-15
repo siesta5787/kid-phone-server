@@ -564,26 +564,32 @@ pub async fn command_result(
     StatusCode::NO_CONTENT
 }
 
-/// Upserts this device's current download progress for one tracked app - purely transient, driving
-/// the unified Apps list's "Installing NN%" status label (see `handlers::devices::view_device`),
-/// not permanent history. The device calls this on its own throttled schedule during a download
-/// (see kids-launcher-mdm's `checkForTrackedAppUpdates`) - best-effort, fire-and-forget from its
-/// side, so a dropped report here just means one stale-looking percentage until the next one lands
-/// or the row goes stale entirely (see the staleness window in `view_device`).
+/// Upserts this device's current download/install status for one tracked app - purely transient,
+/// driving the unified Apps list's "Installing NN%"/"Install failed" status label (see
+/// `handlers::devices::view_device`), not permanent history. The device calls this on its own
+/// throttled schedule during a download (see kids-launcher-mdm's `checkForTrackedAppUpdates`), and
+/// once more on a failure (from either that function or `AppInstallReceiver`) so a failed install
+/// is visible here instead of silently vanishing - previously a failure only ever showed up as a
+/// client-local, permanently-sticky "don't retry" marker with nothing surfaced server-side at all,
+/// which looked to the admin exactly like the request never left the device. Best-effort,
+/// fire-and-forget from the client's side either way - a dropped report just means one
+/// stale-looking status until the next one lands or the row goes stale entirely (see the staleness
+/// window in `view_device`).
 pub async fn install_progress(
     State(state): State<AppState>,
     Extension(AuthedDevice(device)): Extension<AuthedDevice>,
     Json(report): Json<InstallProgressReport>,
 ) -> impl IntoResponse {
     sqlx::query(
-        "INSERT INTO device_install_progress (device_id, tracked_app_id, percent, updated_at) \
-         VALUES (?, ?, ?, datetime('now')) \
+        "INSERT INTO device_install_progress (device_id, tracked_app_id, percent, failed, updated_at) \
+         VALUES (?, ?, ?, ?, datetime('now')) \
          ON CONFLICT(device_id, tracked_app_id) DO UPDATE SET \
-         percent = excluded.percent, updated_at = excluded.updated_at",
+         percent = excluded.percent, failed = excluded.failed, updated_at = excluded.updated_at",
     )
     .bind(device.id)
     .bind(report.tracked_app_id)
     .bind(report.percent)
+    .bind(report.failed)
     .execute(&state.db)
     .await
     .ok();

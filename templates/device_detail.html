@@ -77,7 +77,7 @@
                 <label class="checkbox-row">
                     <input type="checkbox" name="selected" {% if app.checked %}checked{% endif %} onchange="this.form.submit()">
                     {{ app.label }}
-                    <span class="app-status" data-installing="{{ app.is_installing }}">{{ app.status_label }}</span>
+                    <span class="app-status" data-installing="{{ app.is_installing }}" data-failed="{{ app.install_failed }}">{{ app.status_label }}</span>
                     {% if app.show_no_release_hint %} <span class="subtitle">(no release yet - won't install until one's added)</span>{% endif %}
                 </label>
             </form>

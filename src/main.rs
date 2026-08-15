@@ -221,6 +221,10 @@ async fn main() {
             post(handlers::tracked_apps::set_is_launcher),
         )
         .route(
+            "/apps/tracked/{id}/forget-package-name",
+            post(handlers::tracked_apps::forget_package_name),
+        )
+        .route(
             "/apps/tracked/{id}/delete",
             post(handlers::tracked_apps::delete_tracked_app),
         )
