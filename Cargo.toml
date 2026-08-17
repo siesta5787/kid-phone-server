@@ -1,6 +1,6 @@
 [package]
 name = "kid_phone_server"
-version = "0.18.4"
+version = "0.18.5"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
@@ -14,12 +14,17 @@ form_urlencoded = "1"
 hex = "0.4"
 pbkdf2 = "0.12"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "json"] }
 # Not used directly (dns_engine.rs no longer runs a live TLS/DoT listener) - still a direct
 # dependency purely so main.rs can install a process-wide default CryptoProvider before anything
-# opens a connection. reqwest's own "rustls" feature needs one installed somewhere, and there's no
+# opens a connection. reqwest's own rustls backend needs one installed somewhere, and there's no
 # error at the call site if it's missing - see main.rs's comment and this repo's CLAUDE.md gotcha.
+# reqwest's plain "rustls" feature pulls in its own aws-lc-rs crypto backend on top of this one
+# (Cargo unifies features additively, so both got compiled in even though we only ever install/use
+# ring) - "rustls-no-provider" drops that second backend and makes reqwest rely on the provider
+# installed below instead. See http_client.rs for why reqwest also gets its own root cert store.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+webpki-roots = "1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.10"

@@ -1,5 +1,6 @@
 mod dns_engine;
 mod handlers;
+mod http_client;
 mod models;
 mod security;
 

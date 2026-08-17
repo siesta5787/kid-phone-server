@@ -48,7 +48,7 @@ async fn fetch_latest_release(
     github_repo: &str,
     include_prereleases: bool,
 ) -> Result<GithubRelease, String> {
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::client_builder()
         .user_agent("kid-phone-server (self-hosted, github.com)")
         .timeout(Duration::from_secs(15))
         .build()
@@ -109,7 +109,7 @@ async fn sync_one_app(state: &AppState, app: &TrackedApp) -> Result<(), String> 
         return Ok(());
     }
 
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::client_builder()
         .user_agent("kid-phone-server (self-hosted, github.com)")
         .timeout(Duration::from_secs(120))
         .build()

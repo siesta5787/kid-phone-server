@@ -37,7 +37,7 @@ struct LatestRelease {
 }
 
 async fn latest_release_tag() -> Option<String> {
-    let client = reqwest::Client::builder()
+    let client = crate::http_client::client_builder()
         .user_agent("kid-phone-server (self-hosted, github.com)")
         .timeout(Duration::from_secs(8))
         .build()
