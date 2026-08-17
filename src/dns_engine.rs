@@ -100,7 +100,7 @@ pub async fn compile_blocklist(state: &AppState, shared: &SharedCompiledBlocklis
         .filter(|d| !global_custom_allow.contains(d))
         .collect();
 
-    let client = crate::http_client::client_builder()
+    let client = reqwest::Client::builder()
         .user_agent("kid-phone-server (self-hosted, dns filter)")
         .timeout(std::time::Duration::from_secs(30))
         .build()

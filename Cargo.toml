@@ -1,6 +1,6 @@
 [package]
 name = "kid_phone_server"
-version = "0.18.5"
+version = "0.18.6"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
@@ -22,9 +22,12 @@ reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no
 # reqwest's plain "rustls" feature pulls in its own aws-lc-rs crypto backend on top of this one
 # (Cargo unifies features additively, so both got compiled in even though we only ever install/use
 # ring) - "rustls-no-provider" drops that second backend and makes reqwest rely on the provider
-# installed below instead. See http_client.rs for why reqwest also gets its own root cert store.
+# installed below instead. (A separate attempt to also compile in Mozilla's root CA list via
+# reqwest's tls_backend_preconfigured() - avoiding the OS's ca-certificates store at runtime -
+# crashed every startup in production: v0.18.5, reverted in v0.18.6. That method is explicitly
+# documented as having no semver stability on its accepted argument type; don't retry it without
+# a way to actually run the built binary against a live HTTPS endpoint first, not just compile it.)
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-webpki-roots = "1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.10"
