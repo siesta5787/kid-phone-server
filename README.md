@@ -13,7 +13,8 @@ Designed to run on very light hardware (a Raspberry Pi Zero 2 W is the reference
 - **WiFi / Bluetooth restriction levels** (open / restricted / disabled).
 - **Offline override PIN** - a parent-set failsafe that works with zero network connectivity, for when a policy or update ever leaves a phone unreachable.
 - **Launcher app updates**, pushed and installed silently via Device Owner APIs - upload a new build here, phones pick it up on their next sync.
-- Mandatory 2FA admin login, account lockout / IP-ban security log, scheduled backups, and self-update, all built in.
+- Mandatory 2FA admin login, account lockout / IP-ban security log, and scheduled backups, all built in.
+- Runs on a [Box](https://github.com/siesta5787/pi2zeroserver): the Box installs it, serves it over Tailscale HTTPS, and keeps it, its system and Tailscale updated - shown and controlled from the app's **Software updates** page.
 - Installable as a PWA; bottom-tab mobile-first UI with light/dark theming that follows your device.
 
 ## Tech stack
@@ -22,7 +23,9 @@ Rust + [Axum](https://github.com/tokio-rs/axum) + SQLite (via `sqlx`, WAL mode) 
 
 ## Deploying
 
-See [DEPLOY.md](DEPLOY.md) for the full walkthrough. Short version, on a 64-bit Raspberry Pi (or any aarch64 Linux box):
+See [DEPLOY.md](DEPLOY.md) for the full walkthrough. Recommended: flash a [Box](https://github.com/siesta5787/pi2zeroserver) and give it this app's link, `github.com/siesta5787/kid-phone-server`. Its releases are signed for Boxes with the key whose fingerprint is **`344a e11a 0a68 15f2 5b14`** - check that's what the Box shows before you confirm.
+
+Without a Box, on a 64-bit Raspberry Pi (or any aarch64 Linux box):
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/siesta5787/kid-phone-server/master/deploy/install.sh | sudo bash

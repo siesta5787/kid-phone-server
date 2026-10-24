@@ -1,8 +1,20 @@
-# Deploying to a Raspberry Pi / DietPi
+# Deploying
 
-These steps get Kids Device MDM running on a Raspberry Pi Zero 2 W. Only 64-bit (aarch64) is supported.
+## Recommended: on a Box
 
-## 1. Install
+A [Box](https://github.com/siesta5787/pi2zeroserver) is a ready-made system image for a Raspberry Pi Zero 2 W that runs one app, puts it on your Tailscale network over HTTPS, and keeps the app, its own system and Tailscale updated (signed updates that roll back by themselves if something goes wrong). No SSH needed at any point.
+
+1. Flash the Box image onto an SD card and follow its setup (a Wi-Fi hotspot called `Box-Setup-…` walks you through it).
+2. In the Box's **App** section, paste `github.com/siesta5787/kid-phone-server`. Check that the publisher key fingerprint it shows is **`344a e11a 0a68 15f2 5b14`**, then install.
+3. The Box shows the app's first sign-in (username `admin` and a generated password). Open the app at `https://<box-name>.<tailnet>.ts.net/` from a device on your tailnet, sign in, and set your own password and two-factor login.
+
+From then on, **Settings → Software updates** in the app shows the app, the Box's system and Tailscale, and installs their updates. Backups stay on the Box's card (download them now and then to keep a copy elsewhere).
+
+## On a plain Raspberry Pi OS / DietPi install
+
+These steps get Kids Device MDM running on a Raspberry Pi Zero 2 W without a Box. Only 64-bit (aarch64) is supported. The app can't update itself or the OS this way: re-run the installer to update it, and keep the OS updated with the usual tools.
+
+### 1. Install
 
 SSH into the Pi, then run:
 
@@ -14,7 +26,7 @@ This downloads the latest release binary, sets it up as a background service tha
 
 The app only listens on the Pi itself (`127.0.0.1:3100`) by default — that's intentional for security.
 
-## 2. Make it reachable
+### 2. Make it reachable
 
 For plain tailnet access, visit `http://<pi-tailscale-ip>:3100` from any device on your tailnet - no further setup needed.
 
@@ -26,23 +38,19 @@ sudo tailscale serve --bg --https=443 http://127.0.0.1:3100
 
 This gives you `https://<hostname>.<tailnet>.ts.net`, reachable only from your own tailnet. If this Pi already serves something else on port 443 (e.g. `board-game-tracker`), use a different port instead, e.g. `--https=8443`.
 
-## Updating
+### Updating
 
-```
-curl -sSL https://raw.githubusercontent.com/siesta5787/kid-phone-server/master/deploy/update.sh | sudo bash
-```
+Re-run the installer from step 1. It downloads the latest release and restarts the app, without touching your `.env` or database.
 
-Downloads the latest release and swaps the binary in place. Doesn't touch your `.env` or database.
-
-## Useful commands on the Pi
+### Useful commands on the Pi
 
 - Check it's running: `systemctl status kid-phone-server`
 - View logs: `journalctl -u kid-phone-server -f`
 - Restart it: `sudo systemctl restart kid-phone-server`
 
-## Backups
+### Backups
 
-Built in - see the **Backups** page under Settings in the admin UI. Create a backup on demand, set a schedule for automatic ones, and optionally mirror them live to an external drive plugged into the Pi. The database itself lives at `/opt/kid-phone-server/data/kidphone.db` if you ever need it directly.
+Built in - see the **Backups** page under Settings in the admin UI. Create a backup on demand, set a schedule for automatic ones, and (on a plain Pi install) optionally mirror them live to an external drive plugged into the Pi. The database itself lives at `/opt/kid-phone-server/data/kidphone.db` if you ever need it directly.
 
 ## Optional: Molly (Signal) push notifications via MollySocket
 

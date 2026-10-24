@@ -1,28 +1,26 @@
 #!/usr/bin/env bash
-# Kid Phone Server — installer for a Raspberry Pi / DietPi (or any Linux/
-# systemd box).
+# Kid Phone Server — installer for a plain Raspberry Pi OS / DietPi (or any
+# Linux/systemd box).
+#
+# The recommended way to run this app is a Box (github.com/siesta5787/
+# pi2zeroserver): it installs the app, keeps it, its system and Tailscale
+# updated, and is what the app's Software updates page works with. Don't run
+# this installer on a Box.
 #
 # Usage (as root, e.g. via sudo):
 #   curl -sSL https://raw.githubusercontent.com/siesta5787/kid-phone-server/master/deploy/install.sh | sudo bash
 #
 # Safe to re-run: it won't overwrite an existing .env or database, it just
-# re-installs the binary/service/watcher scripts (useful for re-running
-# after a failure, or to pick up a newer privileged action).
+# re-installs the latest release and the service/helper scripts. Re-running
+# it is also how a plain-Pi install updates the app (the in-app updater and
+# OS/Tailscale scheduling were removed; on a plain Pi, keep the OS updated
+# with the usual apt tools).
 
 set -euo pipefail
 
 REPO="siesta5787/kid-phone-server"
 INSTALL_DIR="/opt/kid-phone-server"
 SERVICE_USER="kidphone"
-
-# Bumped only when the privileged scripts below (actions.sh/watcher.sh/
-# scheduler.sh/backup_sync.sh) actually gain or change a privileged action -
-# independent of the app's own release version, which changes on every
-# release including ones that touch nothing here. The app compares this
-# against its own required minimum (security::REQUIRED_WATCHER_SCHEMA) to
-# decide whether re-running this installer is actually necessary, rather
-# than just checking whether the release version strings happen to match.
-WATCHER_SCHEMA_VERSION="4"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Please run this as root (e.g. 'sudo bash install.sh')." >&2
@@ -61,6 +59,16 @@ systemctl disable --now kid-phone-server-tls-cert.timer >/dev/null 2>&1 || true
 rm -f /etc/systemd/system/kid-phone-server-tls-cert.timer /etc/systemd/system/kid-phone-server-tls-cert.service
 rm -f /opt/kid-phone-server-updater/tls_cert_renew.sh
 
+# Cleanup for a Pi set up before the app stopped updating itself and the OS
+# (updates are the Box's job now): the OS/Tailscale scheduler, and the state
+# files the old Software updates page kept.
+systemctl disable --now kid-phone-server-scheduler.timer >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/kid-phone-server-scheduler.timer /etc/systemd/system/kid-phone-server-scheduler.service
+rm -f /opt/kid-phone-server-updater/scheduler.sh /opt/kid-phone-server-updater/last_run_date
+rm -f /opt/kid-phone-server/data/schedule.conf /opt/kid-phone-server/data/app_update_schedule.conf \
+    /opt/kid-phone-server/data/app_update_last_check /opt/kid-phone-server/data/watcher_version \
+    /opt/kid-phone-server/data/watcher_schema_version
+
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
     echo "Creating service user '$SERVICE_USER'..."
     useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
@@ -73,14 +81,6 @@ curl -sSL "$TARBALL_URL" -o /tmp/kid-phone-server.tar.gz
 tar -xzf /tmp/kid-phone-server.tar.gz -C "$INSTALL_DIR"
 rm /tmp/kid-phone-server.tar.gz
 chmod +x "$INSTALL_DIR/kid_phone_server"
-
-# "latest/download/..." redirects to "download/vX.Y.Z/...", which is the only
-# place the actual version tag shows up in this whole download flow. Recorded
-# so the app can tell you when the root-side watcher/scheduler scripts (only
-# ever refreshed by re-running this installer, never by the in-app update
-# button) have fallen behind the app version, instead of silently no-op'ing
-# on features the installed watcher doesn't know about yet.
-INSTALLED_VERSION="$(curl -sI "$TARBALL_URL" | grep -i '^location:' | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 
 mkdir -p "$INSTALL_DIR/data"
 
@@ -101,11 +101,6 @@ else
     echo "Existing .env found — leaving it untouched."
     PRINT_CREDENTIALS=0
 fi
-
-if [ -n "$INSTALLED_VERSION" ]; then
-    echo -n "$INSTALLED_VERSION" >"$INSTALL_DIR/data/watcher_version"
-fi
-echo -n "$WATCHER_SCHEMA_VERSION" >"$INSTALL_DIR/data/watcher_schema_version"
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 chmod 600 "$INSTALL_DIR/.env"
@@ -145,14 +140,15 @@ systemctl enable kid-phone-server
 # this works the same whether this is a fresh install or a re-run.
 systemctl restart kid-phone-server
 
-echo "Installing the update watcher and scheduler..."
-# A separate, root-owned component that does the actual privileged work -
-# updating the app itself, apt packages, Tailscale, and rebooting.
-# kid_phone_server itself runs unprivileged and can only ever drop a flag
-# file in its own data/ folder asking for one of a small fixed set of
-# actions - it can never reach or modify anything in this directory, even if
-# fully compromised, since it lives outside $INSTALL_DIR entirely and
-# nothing here is kidphone-writable.
+echo "Installing the backup helper..."
+# A separate, root-owned component that does the privileged backup work -
+# formatting an external backup drive, restoring a backup (the app has to be
+# stopped for that), and mirroring backups to the drive. kid_phone_server
+# itself runs unprivileged and can only ever drop a flag file in its own
+# data/ folder asking for one of a small fixed set of actions - it can never
+# reach or modify anything in this directory, even if fully compromised,
+# since it lives outside $INSTALL_DIR entirely and nothing here is
+# kidphone-writable.
 UPDATER_DIR="/opt/kid-phone-server-updater"
 mkdir -p "$UPDATER_DIR"
 
@@ -161,41 +157,13 @@ mkdir -p "$UPDATER_DIR"
 # "copy backups to external drive" on the Backups page to use it.
 mkdir -p /mnt/kid-phone-server-backup
 
-# Shared privileged actions, used both by the manual (flag-file-triggered)
-# watcher and the automatic (time-triggered) scheduler, so the actual
-# commands only need to be reviewed/maintained in one place.
+# The privileged actions the flag-file watcher below can run.
 cat >"$UPDATER_DIR/actions.sh" <<'ACTIONS_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="siesta5787/kid-phone-server"
 DATA_DIR="/opt/kid-phone-server/data"
 BACKUP_DIR="$DATA_DIR/backups"
-
-action_app_update() {
-    curl -sSL "https://raw.githubusercontent.com/$REPO/master/deploy/update.sh" | bash
-}
-
-action_app_restart() {
-    systemctl restart kid-phone-server
-}
-
-action_os_check() {
-    apt-get update -qq
-}
-
-action_os_upgrade() {
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
-}
-
-action_tailscale_update() {
-    tailscale update --yes
-}
-
-action_reboot() {
-    systemctl reboot
-}
 
 # Formats a removable drive as ext4 and mounts it at the external backup
 # path. Defense in depth: independently re-validates the device from
@@ -331,8 +299,7 @@ FLAG_FILE="/opt/kid-phone-server/data/update_requested"
 FLAG_CONTENT="$(cat "$FLAG_FILE" 2>/dev/null || true)"
 rm -f "$FLAG_FILE"
 
-# Most actions are a single word; format_drive/restore_backup additionally
-# carry a second, space-separated argument.
+# An action word plus one space-separated argument.
 ACTION="${FLAG_CONTENT%% *}"
 if [ "$ACTION" != "$FLAG_CONTENT" ]; then
     ARG="${FLAG_CONTENT#* }"
@@ -341,12 +308,6 @@ else
 fi
 
 case "$ACTION" in
-    update) action_app_update ;;
-    restart) action_app_restart ;;
-    os_check) action_os_check ;;
-    os_upgrade) action_os_upgrade ;;
-    tailscale_update) action_tailscale_update ;;
-    reboot) action_reboot ;;
     format_drive) action_format_drive "$ARG" ;;
     restore_backup) action_restore_backup "$ARG" ;;
     *)
@@ -356,76 +317,11 @@ case "$ACTION" in
 esac
 WATCHER_EOF
 
-# Runs on a timer (not flag-triggered) to apply the admin-configured
-# schedule from the Software updates page. This script is already root, so
-# unlike the manual path above it just acts directly rather than going
-# through the flag-file indirection - that indirection exists only to let
-# the *unprivileged, internet-facing* app request privileged actions, which
-# doesn't apply to this trusted, non-network-facing component.
-cat >"$UPDATER_DIR/scheduler.sh" <<'SCHEDULER_EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-source /opt/kid-phone-server-updater/actions.sh
-
-CONFIG_FILE="/opt/kid-phone-server/data/schedule.conf"
-LAST_RUN_FILE="/opt/kid-phone-server-updater/last_run_date"
-
-[ -f "$CONFIG_FILE" ] || exit 0
-
-FREQUENCY="daily"
-DAY_OF_WEEK="0"
-DAY_OF_MONTH="1"
-CHECK_TIME="03:00"
-AUTO_APPLY_OS="false"
-AUTO_APPLY_TAILSCALE="false"
-AUTO_REBOOT="false"
-# shellcheck disable=SC1090
-source "$CONFIG_FILE"
-
-TODAY="$(date +%F)"
-LAST_RUN="$(cat "$LAST_RUN_FILE" 2>/dev/null || true)"
-[ "$LAST_RUN" != "$TODAY" ] || exit 0
-
-case "$FREQUENCY" in
-    weekly)
-        [ "$(date +%w)" = "$DAY_OF_WEEK" ] || exit 0
-        ;;
-    monthly)
-        [ "$(date +%-d)" = "$DAY_OF_MONTH" ] || exit 0
-        ;;
-esac
-
-NOW_MINUTES=$(( 10#$(date +%H) * 60 + 10#$(date +%M) ))
-TARGET_MINUTES=$(( 10#${CHECK_TIME%%:*} * 60 + 10#${CHECK_TIME##*:} ))
-DIFF=$(( NOW_MINUTES - TARGET_MINUTES ))
-# Only fire in the 10-minute window right after the scheduled time (this
-# runs on a 10-minute timer, so this is the precision that's actually
-# achievable - good enough for background maintenance).
-[ "$DIFF" -ge 0 ] && [ "$DIFF" -lt 10 ] || exit 0
-
-echo "$TODAY" >"$LAST_RUN_FILE"
-
-action_os_check
-if [ "$AUTO_APPLY_OS" = "true" ]; then
-    action_os_upgrade
-fi
-if [ "$AUTO_APPLY_TAILSCALE" = "true" ]; then
-    action_tailscale_update
-fi
-if [ "$AUTO_REBOOT" = "true" ] && [ -f /var/run/reboot-required ]; then
-    action_reboot
-fi
-SCHEDULER_EOF
-
 # Mirrors backups (both the named point-in-time snapshots and the
 # continuously-refreshed live-mirror file) to the external drive, if
-# enabled and the drive is currently mounted. Runs on its own much faster
-# timer than the OS-update scheduler above, since a stale offsite copy
-# defeats the point of having one. Reads just the settings it needs via
-# grep rather than sourcing backup_schedule.conf, since that file and
-# schedule.conf (above) share variable names (FREQUENCY, DAY_OF_WEEK, ...)
-# and sourcing both in the same script would let one silently clobber the
-# other.
+# enabled and the drive is currently mounted, on a fast timer, since a stale
+# offsite copy defeats the point of having one. Reads just the settings it
+# needs via grep rather than sourcing backup_schedule.conf.
 cat >"$UPDATER_DIR/backup_sync.sh" <<'BACKUP_SYNC_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -452,11 +348,11 @@ fi
 BACKUP_SYNC_EOF
 
 chown -R root:root "$UPDATER_DIR"
-chmod 700 "$UPDATER_DIR" "$UPDATER_DIR/actions.sh" "$UPDATER_DIR/watcher.sh" "$UPDATER_DIR/scheduler.sh" "$UPDATER_DIR/backup_sync.sh"
+chmod 700 "$UPDATER_DIR" "$UPDATER_DIR/actions.sh" "$UPDATER_DIR/watcher.sh" "$UPDATER_DIR/backup_sync.sh"
 
 cat >/etc/systemd/system/kid-phone-server-updater.path <<'PATH_EOF'
 [Unit]
-Description=Watch for Kid Phone Server update/restart requests
+Description=Watch for Kid Phone Server backup requests (format drive, restore)
 
 [Path]
 PathExists=/opt/kid-phone-server/data/update_requested
@@ -467,33 +363,12 @@ PATH_EOF
 
 cat >/etc/systemd/system/kid-phone-server-updater.service <<'SERVICE_EOF'
 [Unit]
-Description=Handle a pending Kid Phone Server update/restart request
+Description=Handle a pending Kid Phone Server backup request
 
 [Service]
 Type=oneshot
 ExecStart=/opt/kid-phone-server-updater/watcher.sh
 SERVICE_EOF
-
-cat >/etc/systemd/system/kid-phone-server-scheduler.timer <<'TIMER_EOF'
-[Unit]
-Description=Check the Kid Phone Server update/reboot schedule every 10 minutes
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=10min
-
-[Install]
-WantedBy=timers.target
-TIMER_EOF
-
-cat >/etc/systemd/system/kid-phone-server-scheduler.service <<'SCHED_SERVICE_EOF'
-[Unit]
-Description=Apply the Kid Phone Server scheduled update/reboot, if due
-
-[Service]
-Type=oneshot
-ExecStart=/opt/kid-phone-server-updater/scheduler.sh
-SCHED_SERVICE_EOF
 
 cat >/etc/systemd/system/kid-phone-server-backup-sync.timer <<'BACKUP_TIMER_EOF'
 [Unit]
@@ -518,7 +393,6 @@ BACKUP_SERVICE_EOF
 
 systemctl daemon-reload
 systemctl enable --now kid-phone-server-updater.path
-systemctl enable --now kid-phone-server-scheduler.timer
 systemctl enable --now kid-phone-server-backup-sync.timer
 
 echo ""
@@ -541,8 +415,8 @@ echo "This only listens on the Pi itself (127.0.0.1) for security. To reach it"
 echo "from your phone or other devices, set up Tailscale (or Tailscale Funnel"
 echo "for a public URL) next - see DEPLOY.md."
 echo ""
-echo "Future updates, backups, and restarts can all be done from the app's"
-echo "Backups / Software updates pages once logged in - you shouldn't need to"
-echo "SSH back in for routine maintenance after this."
+echo "Backups can be made and restored from the app's Backups page. To update"
+echo "the app, re-run this installer. (For hands-off updates of the app, the"
+echo "system and Tailscale, run it on a Box instead: github.com/siesta5787/pi2zeroserver)"
 echo ""
 echo "Check status any time with: systemctl status kid-phone-server"

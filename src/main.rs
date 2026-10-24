@@ -1,3 +1,4 @@
+mod box_api;
 mod dns_engine;
 mod handlers;
 mod models;
@@ -50,6 +51,9 @@ async fn main() {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("failed to install default rustls crypto provider");
+
+    // A backup restore requested on a Box happens now, before the database is opened
+    handlers::backups::apply_pending_restore();
 
     let database_url =
         std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://data/kidphone.db".into());
@@ -304,38 +308,14 @@ async fn main() {
             post(handlers::backups::format_drive),
         )
         .route("/updates", get(handlers::updates::show_updates_page))
+        .route("/updates/check", post(handlers::updates::check))
+        .route("/updates/system", post(handlers::updates::install_system))
+        .route("/updates/app", post(handlers::updates::update_app))
         .route(
-            "/update/trigger",
-            post(handlers::system_update::trigger_update),
+            "/updates/tailscale",
+            post(handlers::updates::update_tailscale),
         )
-        .route(
-            "/update/restart",
-            post(handlers::system_update::trigger_restart),
-        )
-        .route(
-            "/update/schedule",
-            post(handlers::system_update::save_app_update_schedule),
-        )
-        .route(
-            "/system/os/check",
-            post(handlers::system_maintenance::trigger_os_check),
-        )
-        .route(
-            "/system/os/upgrade",
-            post(handlers::system_maintenance::trigger_os_upgrade),
-        )
-        .route(
-            "/system/tailscale/update",
-            post(handlers::system_maintenance::trigger_tailscale_update),
-        )
-        .route(
-            "/system/reboot",
-            post(handlers::system_maintenance::trigger_reboot),
-        )
-        .route(
-            "/system/schedule",
-            post(handlers::system_maintenance::save_schedule),
-        )
+        .route("/updates/restart", post(handlers::updates::restart_box))
         .route("/security", get(handlers::admin::security_log))
         .route("/security/unban/{ip}", post(handlers::admin::unban_ip))
         .route("/account", get(handlers::auth::account_page))
@@ -406,9 +386,6 @@ async fn main() {
 
     tokio::task::spawn(handlers::backups::run_scheduled_backups(state.clone()));
     tokio::task::spawn(handlers::backups::run_live_mirror(state.clone()));
-    tokio::task::spawn(handlers::system_update::run_scheduled_app_update_check(
-        state.clone(),
-    ));
     tokio::task::spawn(handlers::tracked_apps::run_scheduled_tracked_app_sync(
         state.clone(),
     ));

@@ -257,53 +257,6 @@ pub fn generate_totp_secret_base32() -> String {
     }
 }
 
-/// Plain read of whatever version install.sh last stamped into
-/// `data/watcher_version`, purely for display ("System helper scripts:
-/// vX.Y.Z"). Whether that's actually a *problem* is answered separately by
-/// `watcher_needs_update` below.
-pub async fn installed_watcher_version() -> Option<String> {
-    let installed = tokio::fs::read_to_string("data/watcher_version")
-        .await
-        .ok()?;
-    let installed = installed.trim();
-    if installed.is_empty() {
-        None
-    } else {
-        Some(installed.to_string())
-    }
-}
-
-/// The watcher "schema" version: a small counter, independent of the app's
-/// own release version, bumped only when install.sh's root-side scripts
-/// (actions.sh/watcher.sh/scheduler.sh/backup_sync.sh) actually gain or
-/// change a privileged action - see board-game-tracker's CLAUDE.md for why
-/// comparing raw version strings directly was the wrong check (it fired on
-/// every single app release regardless of whether the watcher itself had
-/// changed at all).
-pub const REQUIRED_WATCHER_SCHEMA: u32 = 4;
-
-async fn installed_watcher_schema() -> Option<u32> {
-    let raw = tokio::fs::read_to_string("data/watcher_schema_version")
-        .await
-        .ok()?;
-    raw.trim().parse::<u32>().ok()
-}
-
-/// Whether the installed watcher is missing a privileged action the app
-/// might need to request. An unknown schema (no marker at all - a fresh
-/// install that hasn't run install.sh's watcher setup yet) is treated as
-/// needing an update too, since it can't be confirmed safe either way.
-pub async fn watcher_needs_update() -> bool {
-    installed_watcher_schema()
-        .await
-        .is_none_or(|schema| schema < REQUIRED_WATCHER_SCHEMA)
-}
-
-/// Re-run hint shown wherever the watcher version is displayed - the
-/// root-side watcher/scheduler scripts are only ever refreshed by re-running
-/// install.sh (the in-app "Update now" button only swaps the app binary).
-pub const REINSTALL_HINT: &str = "curl -sSL https://raw.githubusercontent.com/siesta5787/kid-phone-server/master/deploy/install.sh | sudo bash";
-
 /// Creates the first admin account from ADMIN_USERNAME/ADMIN_PASSWORD env
 /// vars if the admin_users table is empty - there's no self-registration, so
 /// this is the only way to get a first account onto a fresh install.

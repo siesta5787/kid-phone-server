@@ -1,0 +1,11 @@
+{
+  "name": "kid-phone-server",
+  "asset": "kid-phone-server-aarch64-unknown-linux-musl.tar.gz",
+  "command": "kid_phone_server",
+  "env": {
+    "DATABASE_URL": "sqlite://data/kidphone.db",
+    "ADMIN_USERNAME": "admin"
+  },
+  "secrets": ["ADMIN_PASSWORD"],
+  "first_login": { "username": "admin", "password": "ADMIN_PASSWORD" }
+}

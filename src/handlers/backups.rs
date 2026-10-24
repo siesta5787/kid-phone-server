@@ -5,8 +5,13 @@
 //! this process can already write to - so scheduling lives entirely in this
 //! process as a background task (see `run_scheduled_backups` in main.rs),
 //! unlike the OS/Tailscale scheduler which needs a separate root component.
-//! The one piece that *does* need root is copying backups to an external
-//! drive (outside `data/`), which the root scheduler in install.sh handles.
+//! The pieces that *do* need root on a plain Raspberry Pi OS install -
+//! copying backups to an external drive, formatting one, and restoring (the
+//! app has to be stopped to swap its database) - go through install.sh's
+//! root helper. On a Box there's no such helper and the app can't touch
+//! drives, so the external-drive options are hidden, and a restore is done by
+//! the app itself: it records the request, exits, and swaps the database in
+//! at its next start (`apply_pending_restore`), before opening it.
 
 use askama::Template;
 use axum::Extension;
@@ -25,6 +30,8 @@ const LAST_RUN_FILE: &str = "data/backup_schedule_last_run";
 const EXTERNAL_MOUNT: &str = "/mnt/kid-phone-server-backup";
 const LIVE_MIRROR_DB: &str = "data/live_mirror.db";
 const FLAG_FILE: &str = "data/update_requested";
+/// A restore waiting for the app's next start (on a Box)
+const RESTORE_REQUEST: &str = "data/restore_requested";
 
 struct BackupRow {
     filename: String,
@@ -281,6 +288,8 @@ struct BackupsTemplate {
     external_mount: String,
     external_drive_mounted: bool,
     removable_drives: Vec<RemovableDrive>,
+    /// Running on a Box: no external drives, restore without root
+    on_box: bool,
 }
 
 async fn render_backups(success: Option<String>, error: Option<String>) -> Html<String> {
@@ -334,6 +343,7 @@ async fn render_backups(success: Option<String>, error: Option<String>) -> Html<
             external_mount: EXTERNAL_MOUNT.to_string(),
             external_drive_mounted: external_drive_mounted().await,
             removable_drives: list_removable_drives().await,
+            on_box: crate::box_api::socket().is_some(),
         }
         .render()
         .unwrap(),
@@ -675,6 +685,12 @@ pub async fn format_drive(
     Extension(CurrentAdmin(admin)): Extension<CurrentAdmin>,
     axum::Form(form): axum::Form<FormatDriveForm>,
 ) -> impl IntoResponse {
+    if crate::box_api::socket().is_some() {
+        let message = "The app can't use drives on a Box - nothing was formatted.";
+        return render_backups(None, Some(message.to_string()))
+            .await
+            .into_response();
+    }
     let drives = list_removable_drives().await;
     let Some(drive) = drives.iter().find(|d| d.device == form.device) else {
         return render_backups(
@@ -761,6 +777,10 @@ pub async fn restore_backup(
         .into_response();
     }
 
+    if crate::box_api::socket().is_some() {
+        return restore_on_box(&state, &admin.username, &filename).await;
+    }
+
     let flag_content = format!("restore_backup {filename}");
     let message = if tokio::fs::write(FLAG_FILE, &flag_content).await.is_ok() {
         security::record_security_event(
@@ -779,6 +799,94 @@ pub async fn restore_backup(
     };
 
     render_backups(Some(message), None).await.into_response()
+}
+
+/// On a Box: records the restore and stops the app; the Box starts it again
+/// (it restarts the app whenever it exits with an error), and
+/// `apply_pending_restore` swaps the database in before it's opened.
+async fn restore_on_box(state: &AppState, admin: &str, filename: &str) -> axum::response::Response {
+    if tokio::fs::write(RESTORE_REQUEST, filename).await.is_err() {
+        let message = "Couldn't record the restore - nothing was restored.".to_string();
+        return render_backups(None, Some(message)).await.into_response();
+    }
+    security::record_security_event(
+        &state.db,
+        "backup_restore_triggered",
+        Some(admin),
+        None,
+        Some(filename),
+    )
+    .await;
+    tokio::spawn(async {
+        // Let this page reach the browser first
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tracing::info!("stopping to restore a backup; the Box starts the app again");
+        std::process::exit(75);
+    });
+    let message = "Restoring now - the app restarts with the backup's data in about a minute, \
+                   and is unreachable until then. Reload this page after that."
+        .to_string();
+    render_backups(Some(message), None).await.into_response()
+}
+
+/// The database file DATABASE_URL points at (sqlite://data/kidphone.db by default)
+fn database_file() -> std::path::PathBuf {
+    let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://data/kidphone.db".into());
+    let path = url
+        .trim_start_matches("sqlite://")
+        .trim_start_matches("sqlite:");
+    std::path::PathBuf::from(path.split('?').next().unwrap_or(path))
+}
+
+/// Swaps a backup's database in if a restore is waiting (see
+/// `restore_on_box`). Call before the database is opened. Keeps a copy of
+/// the database it replaces in `data/backups/prerestore-<time>/`, like the
+/// root helper on a plain Pi install does.
+pub fn apply_pending_restore() {
+    let Ok(requested) = std::fs::read_to_string(RESTORE_REQUEST) else {
+        return;
+    };
+    let _ = std::fs::remove_file(RESTORE_REQUEST);
+    let filename = requested.trim();
+    match restore_database(std::path::Path::new(BACKUP_DIR), filename, &database_file()) {
+        Ok(()) => tracing::info!("restored the database from backup {filename}"),
+        Err(e) => {
+            tracing::error!("couldn't restore backup {filename:?}: {e}; kept the current database")
+        }
+    }
+}
+
+fn restore_database(
+    backups: &std::path::Path,
+    filename: &str,
+    db: &std::path::Path,
+) -> Result<(), String> {
+    if !is_safe_backup_filename(filename) {
+        return Err("not a backup file name".into());
+    }
+    let zip = std::fs::File::open(backups.join(filename)).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(zip).map_err(|e| e.to_string())?;
+    let mut entry = archive
+        .by_name("kidphone.db")
+        .map_err(|_| "the backup has no kidphone.db".to_string())?;
+    let incoming = db.with_extension("db.restoring");
+    let mut out = std::fs::File::create(&incoming).map_err(|e| e.to_string())?;
+    std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+    out.sync_all().map_err(|e| e.to_string())?;
+
+    let safety = backups.join(format!(
+        "prerestore-{}",
+        chrono::Local::now().format("%Y%m%d-%H%M%S")
+    ));
+    std::fs::create_dir_all(&safety).map_err(|e| e.to_string())?;
+    if db.exists() {
+        std::fs::copy(db, safety.join("kidphone.db")).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&incoming, db).map_err(|e| e.to_string())?;
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", db.display()));
+    }
+    Ok(())
 }
 
 /// Accepts an uploaded backup zip - e.g. one downloaded earlier and saved
@@ -851,4 +959,54 @@ pub async fn upload_backup(mut multipart: axum::extract::Multipart) -> impl Into
     };
 
     render_backups(Some(message), None).await.into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restores_a_backup_and_keeps_a_safety_copy() {
+        let dir = std::env::temp_dir().join(format!("kps-restore-test-{}", std::process::id()));
+        let backups = dir.join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        let db = dir.join("kidphone.db");
+        std::fs::write(&db, b"current").unwrap();
+        std::fs::write(dir.join("kidphone.db-wal"), b"wal").unwrap();
+        {
+            let file = std::fs::File::create(backups.join("backup-20261024-120000.zip")).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            zip.start_file("kidphone.db", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"from the backup").unwrap();
+            zip.finish().unwrap();
+        }
+        assert!(
+            restore_database(&backups, "../kidphone.db", &db).is_err(),
+            "only backup files"
+        );
+        assert!(restore_database(&backups, "backup-missing.zip", &db).is_err());
+        assert_eq!(
+            std::fs::read(&db).unwrap(),
+            b"current",
+            "untouched by failed restores"
+        );
+
+        restore_database(&backups, "backup-20261024-120000.zip", &db).unwrap();
+        assert_eq!(std::fs::read(&db).unwrap(), b"from the backup");
+        assert!(
+            !dir.join("kidphone.db-wal").exists(),
+            "the old write-ahead log must not be replayed"
+        );
+        let safety = std::fs::read_dir(&backups)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.file_name().to_string_lossy().starts_with("prerestore-"))
+            .unwrap();
+        assert_eq!(
+            std::fs::read(safety.path().join("kidphone.db")).unwrap(),
+            b"current"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
