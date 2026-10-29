@@ -37,22 +37,20 @@ use crate::models::{Device, ProvisioningSettings};
 /// always the latest `master` build - see that repo's CLAUDE.md), so this
 /// QR code stays valid across every new build with nothing to regenerate.
 const ADMIN_COMPONENT: &str =
-    "com.kidslauncher.mdm.debug/com.kidslauncher.mdm.server.MdmDeviceAdminReceiver";
+    "com.kidslauncher.mdm/com.kidslauncher.mdm.server.MdmDeviceAdminReceiver";
 
-/// SHA-256 digest of the signing certificate embedded in every release APK
-/// (from the repo's `ANDROID_DEBUG_KEYSTORE` CI secret), base64url-encoded
-/// with no padding - the format `PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM`
-/// requires. Computed via:
-///   apksigner verify --print-certs app-debug.apk   # gives the SHA-256 digest as hex
+/// SHA-256 digest of the shared Kids MDM release key's certificate (the launcher
+/// repo's `RELEASE_KEYSTORE` CI secret, since launcher v0.50.0 - the debug
+/// keystore before that), base64url-encoded with no padding - the format
+/// `PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM` requires. Computed via:
+///   apksigner verify --print-certs app-release.apk   # gives the SHA-256 digest as hex
 /// then hex -> raw bytes -> base64 -> replace + with -, / with _, strip
-/// trailing =. Matches the SHA-1 fingerprint (a70b3763f8a378e3e32da9154b7c2808891bf5f4)
-/// already trusted elsewhere in this project's deploy discipline - same
-/// certificate, different digest algorithm. Recompute and update this
-/// constant if the signing key is ever rotated.
-const SIGNATURE_CHECKSUM: &str = "TLXcVaskQBZyh0S88O29PvHa9RaiCCl-7TybpGlbmkg";
+/// trailing =. Hex form: C101C6F44B7ECC27AF0CE8B42A81647F15A61A267433B8459B8B954FD4CB4DAB.
+/// Recompute and update this constant if the signing key is ever rotated.
+const SIGNATURE_CHECKSUM: &str = "wQHG9Et-zCevDOi0KoFkfxWmGiZ0M7hFm4uVT9TLTas";
 
 const APK_DOWNLOAD_URL: &str =
-    "https://github.com/siesta5787/kids-launcher-mdm/releases/download/pre-release/app-debug.apk";
+    "https://github.com/siesta5787/kids-launcher-mdm/releases/download/pre-release/app-release.apk";
 
 /// android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE's contents - Android's own
 /// documented mechanism for passing arbitrary DPC-defined data through zero-touch/QR/NFC
