@@ -1,0 +1,54 @@
+name: Box sign
+
+# Attaches a box-app.json signed with this app's Box key (repository secret BOX_APP_KEY, the whole
+# PEM; fingerprint 344a e11a 0a68 15f2 5b14) to a release - Boxes only install releases that carry
+# one. Called by release.yml after every tagged build, or run by hand to sign an existing release.
+# Adapted from pi2zeroserver's docs/examples/box-release.yml; called from release.yml rather than
+# triggered on `release: published`, since GitHub doesn't fire that event for releases created by
+# another workflow's GITHUB_TOKEN.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to sign (e.g. v0.20.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Get the box tools
+        env:
+          # Pinned to a reviewed pi2zeroserver commit, not main - this script handles the signing
+          # key. Re-review before bumping.
+          BOX_TOOLS_REF: 62988577715ac29c6ff9eb41cb48e7ceb272fbb1
+        run: |
+          curl -fsSL -o app-release.sh \
+            "https://raw.githubusercontent.com/siesta5787/pi2zeroserver/${BOX_TOOLS_REF}/tools/app-release.sh"
+          chmod +x app-release.sh
+
+      - name: Sign and attach box-app.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOX_APP_KEY: ${{ secrets.BOX_APP_KEY }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$BOX_APP_KEY" > "$key"
+          ./app-release.sh sign --key "$key" --spec box-app-spec.json \
+            --repo "$GITHUB_REPOSITORY" --tag "$TAG"
