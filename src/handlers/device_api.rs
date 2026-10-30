@@ -14,8 +14,8 @@ use crate::AppState;
 use crate::models::{
     BrowserHistoryUpload, CommandResultRequest, Device, DeviceCommand, DevicePolicy,
     DnsBlocklistCategory, DnsEventReport, DnsFilterSettings, EnrollRequest, EnrollResponse,
-    GlobalSchedule, InstallProgressReport, InstalledApp, JournalEntryUpload, PendingCommand,
-    PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
+    GlobalSchedule, InstallProgressReport, InstalledApp, JournalEntryUpload, LockedReportRequest,
+    PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -518,6 +518,38 @@ pub async fn status(
     // reading available, not just after a `locate` command - see
     // LocationReport's doc comment. Pruned on a schedule (30 days) by
     // handlers::locate::run_location_pruning.
+    if let Some(loc) = report.location {
+        sqlx::query(
+            "INSERT INTO device_locations \
+             (device_id, latitude, longitude, accuracy_meters, captured_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(device.id)
+        .bind(loc.latitude)
+        .bind(loc.longitude)
+        .bind(loc.accuracy_meters)
+        .bind(&loc.captured_at)
+        .execute(&state.db)
+        .await
+        .ok();
+    }
+
+    StatusCode::NO_CONTENT
+}
+
+/// See [LockedReportRequest] - only proves the phone is alive (`last_seen_at`) and adds a point to
+/// the Find My Device trail; never touches `device_status`.
+pub async fn locked_report(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
+    Json(report): Json<LockedReportRequest>,
+) -> impl IntoResponse {
+    sqlx::query("UPDATE devices SET last_seen_at = datetime('now') WHERE id = ?")
+        .bind(device.id)
+        .execute(&state.db)
+        .await
+        .ok();
+
     if let Some(loc) = report.location {
         sqlx::query(
             "INSERT INTO device_locations \

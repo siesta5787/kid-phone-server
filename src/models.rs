@@ -313,6 +313,15 @@ pub struct LocationReport {
     pub captured_at: String,
 }
 
+/// Find My Device's heartbeat from a phone that has rebooted but not been unlocked yet (launcher
+/// v0.52.0+). Deliberately not a [StatusReportRequest]: before the first unlock the launcher can't
+/// read its installed apps, kiosk state or lock reason, and a status row without them would
+/// replace the last real snapshot the admin site's allowlist checkboxes are built from.
+#[derive(Deserialize)]
+pub struct LockedReportRequest {
+    pub location: Option<LocationReport>,
+}
+
 #[derive(Deserialize)]
 pub struct CommandResultRequest {
     pub command_id: i64,

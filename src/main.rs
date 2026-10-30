@@ -339,6 +339,10 @@ async fn main() {
         .route("/api/devices/policy", get(handlers::device_api::policy))
         .route("/api/devices/status", post(handlers::device_api::status))
         .route(
+            "/api/devices/locked-report",
+            post(handlers::device_api::locked_report),
+        )
+        .route(
             "/api/devices/command-result",
             post(handlers::device_api::command_result),
         )
