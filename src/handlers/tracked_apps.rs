@@ -6,6 +6,11 @@
 //! device-facing API (`handlers::device_api::tracked_app_updates`), so nothing
 //! downstream of "there's a cached release ready to serve" needs to know or
 //! care which source produced it.
+//!
+//! Every new release from either source goes through one review step first (`stage_release`):
+//! the APK is read (`crate::apk`) and either published straight away or held as the app's one
+//! pending release - for the parent's approval when something looks off (`review_reasons`), or
+//! just until the app's hold period runs out. Devices only ever see the published release.
 
 use askama::Template;
 use axum::extract::{Multipart, Path, State};
@@ -16,6 +21,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::AppState;
+use crate::apk::ApkInfo;
 use crate::models::TrackedApp;
 use crate::security::{CurrentAdmin, generate_device_token};
 
@@ -77,12 +83,319 @@ fn pick_asset<'a>(
     })
 }
 
-/// Checks one GitHub-sourced app's repo for a new release and, if the
-/// release+asset identity differs from what's cached, downloads the
-/// matching asset and replaces the previously-cached file. A no-op for
-/// manual-source apps - those only ever change via `upload_tracked_app_release`.
-/// Used by both the scheduled loop and the admin's manual "Check now"
-/// button, so they can never drift apart.
+/// How a release is identified for "have we seen this one before" checks - the same
+/// `"{tag}@{asset_id}"` composite `device_api::tracked_app_updates` sends to devices (see that
+/// handler for why the asset id matters for rolling tags). Plain tag for manual uploads.
+fn release_key(tag: &str, asset_id: Option<i64>) -> String {
+    match asset_id {
+        Some(id) => format!("{tag}@{id}"),
+        None => tag.to_string(),
+    }
+}
+
+/// A release already saved to disk, not yet published or held.
+struct StagedRelease {
+    tag: String,
+    asset_id: Option<i64>,
+    file_path: String,
+    apk: Result<ApkInfo, String>,
+}
+
+async fn analyze_file(file_path: &str) -> Result<ApkInfo, String> {
+    let path = std::path::PathBuf::from(file_path);
+    tokio::task::spawn_blocking(move || crate::apk::analyze(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Why a new release needs the parent to look at it before it goes to any phone - empty when
+/// it can go out on its own (after the app's hold period, if any). Compares against the live
+/// release (`live`, when its APK could be read) and the pinned signing key (`pin`).
+///
+/// Never a dead end: every reason here is a hold, not a refusal, so a bug in reading some
+/// unusual APK can't block an app's updates - the parent can always publish it anyway.
+fn review_reasons(
+    live: Option<&ApkInfo>,
+    pin: Option<&str>,
+    has_live_release: bool,
+    candidate: &Result<ApkInfo, String>,
+    from_admin_upload: bool,
+) -> Vec<String> {
+    let apk = match candidate {
+        Ok(apk) => apk,
+        Err(e) => {
+            return vec![format!(
+                "Couldn't read this APK ({e}), so its version, permissions and signing key are \
+                 unknown. Only publish it if you're sure it's the right file."
+            )];
+        }
+    };
+
+    let mut reasons = Vec::new();
+    // An admin upload is already a deliberate choice of this exact file.
+    if !has_live_release && !from_admin_upload {
+        reasons.push("New app. Check what it can access before it goes to any phone.".to_string());
+    }
+    if let Some(live) = live {
+        if live.package_name != apk.package_name {
+            reasons.push(format!(
+                "This is a different app ({}) from the one phones have now ({}).",
+                apk.package_name, live.package_name
+            ));
+        }
+        if apk.version_code < live.version_code {
+            reasons.push(format!(
+                "Older version ({}) than the one phones have now ({}). Android won't install an \
+                 older version over a newer one.",
+                apk.version_label(),
+                live.version_label()
+            ));
+        }
+        // Compared per Android permission, not per label - an app going from approximate to
+        // precise location is still worth a look even though both read "Location".
+        let mut added: Vec<&str> = apk
+            .permissions
+            .iter()
+            .filter(|p| !live.permissions.contains(p))
+            .filter_map(|p| crate::apk::sensitive_permission_label(p))
+            .collect();
+        added.sort_unstable();
+        added.dedup();
+        if !added.is_empty() {
+            reasons.push(format!("Asks for new access: {}.", added.join(", ")));
+        }
+    }
+    match (&apk.cert_sha256, pin) {
+        (None, _) => reasons.push("Isn't signed, so Android won't install it.".to_string()),
+        (Some(cert), Some(pin)) if cert != pin => reasons.push(
+            "Signed with a different key than earlier versions. That can mean it didn't come \
+             from the app's real developer. Android will refuse to install it over the current \
+             version unless the developer properly moved to a new key."
+                .to_string(),
+        ),
+        _ => {}
+    }
+    // Recent Pixels (7 and later) can't run 32-bit-only apps at all.
+    if !apk.native_abis.is_empty() && !apk.native_abis.iter().any(|a| a == "arm64-v8a") {
+        reasons.push(format!(
+            "Has no 64-bit ARM build (only {}), so it probably won't install on the phones.",
+            apk.native_abis.join(", ")
+        ));
+    }
+    reasons
+}
+
+const CLEAR_PENDING: &str = "pending_release_tag = NULL, pending_release_asset_id = NULL, \
+     pending_release_file_path = NULL, pending_apk_json = NULL, pending_review_reasons = NULL, \
+     pending_publish_after = NULL, pending_found_at = NULL";
+
+/// Decides what happens to a release that was just downloaded or uploaded: published straight
+/// away, or held as this app's one pending release (replacing any older pending one) - for the
+/// parent's review if `review_reasons` found anything, otherwise just until the hold period ends.
+async fn stage_release(
+    state: &AppState,
+    app: &TrackedApp,
+    release: StagedRelease,
+    from_admin_upload: bool,
+) -> Result<(), String> {
+    let reasons = review_reasons(
+        app.latest_apk().as_ref(),
+        app.signing_cert_sha256.as_deref(),
+        app.latest_release_file_path.is_some(),
+        &release.apk,
+        from_admin_upload,
+    );
+    // The launcher enforces everything else on the phone, so its own fixes are never delayed.
+    let hold_days = if app.is_launcher || from_admin_upload {
+        0
+    } else {
+        app.hold_days.max(0)
+    };
+
+    if let Some(old) = &app.pending_release_file_path {
+        if old != &release.file_path {
+            tokio::fs::remove_file(old).await.ok();
+        }
+    }
+
+    if reasons.is_empty() && hold_days == 0 {
+        return publish(state, app, release).await;
+    }
+
+    let publish_after_modifier = reasons.is_empty().then(|| format!("+{hold_days} days"));
+    sqlx::query(
+        "UPDATE tracked_apps SET pending_release_tag = ?, pending_release_asset_id = ?, \
+         pending_release_file_path = ?, pending_apk_json = ?, pending_review_reasons = ?, \
+         pending_publish_after = CASE WHEN ? IS NULL THEN NULL ELSE datetime('now', ?) END, \
+         pending_found_at = datetime('now') WHERE id = ?",
+    )
+    .bind(&release.tag)
+    .bind(release.asset_id)
+    .bind(&release.file_path)
+    .bind(
+        release
+            .apk
+            .as_ref()
+            .ok()
+            .and_then(|a| serde_json::to_string(a).ok()),
+    )
+    .bind(serde_json::to_string(&reasons).unwrap_or_else(|_| "[]".to_string()))
+    .bind(&publish_after_modifier)
+    .bind(&publish_after_modifier)
+    .bind(app.id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Makes `release` the live one devices download, replacing (and deleting) the previous live
+/// file and clearing any pending release. A release signed with a new key moves the pin to that
+/// key - reaching here with one means the parent approved it.
+async fn publish(state: &AppState, app: &TrackedApp, release: StagedRelease) -> Result<(), String> {
+    let apk = release.apk.ok();
+    sqlx::query(&format!(
+        "UPDATE tracked_apps SET latest_release_tag = ?, latest_release_asset_id = ?, \
+         latest_release_file_path = ?, latest_apk_json = ?, \
+         signing_cert_sha256 = COALESCE(?, signing_cert_sha256), {CLEAR_PENDING} WHERE id = ?"
+    ))
+    .bind(&release.tag)
+    .bind(release.asset_id)
+    .bind(&release.file_path)
+    .bind(apk.as_ref().and_then(|a| serde_json::to_string(a).ok()))
+    .bind(apk.as_ref().and_then(|a| a.cert_sha256.clone()))
+    .bind(app.id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if let Some(old) = &app.latest_release_file_path {
+        if old != &release.file_path {
+            tokio::fs::remove_file(old).await.ok();
+        }
+    }
+    if let Some(apk) = &apk {
+        fill_package_name(state, app, &apk.package_name).await;
+    }
+
+    // Nudge the phones that get this app to sync now rather than at their next poll - the same
+    // data-free SSE nudge a policy save sends (see AppState::command_notify).
+    let device_ids: Vec<i64> = if app.is_launcher {
+        sqlx::query_scalar("SELECT id FROM devices")
+            .fetch_all(&state.db)
+            .await
+    } else {
+        sqlx::query_scalar("SELECT device_id FROM device_tracked_apps WHERE tracked_app_id = ?")
+            .bind(app.id)
+            .fetch_all(&state.db)
+            .await
+    }
+    .unwrap_or_default();
+    for device_id in device_ids {
+        let _ = state.command_notify.send(device_id);
+    }
+
+    Ok(())
+}
+
+/// The APK is the authority on its own package name, so a catalog app that doesn't have one on
+/// file yet gets it from here - before any phone installs it, instead of waiting for
+/// device_api::status's after-install guess - and is allowlisted on every device it's already
+/// selected for, which toggle_tracked_app couldn't do at selection time without a package name.
+async fn fill_package_name(state: &AppState, app: &TrackedApp, package_name: &str) {
+    if !app.package_name.is_empty() || package_name.is_empty() {
+        return;
+    }
+    sqlx::query("UPDATE tracked_apps SET package_name = ? WHERE id = ? AND package_name = ''")
+        .bind(package_name)
+        .bind(app.id)
+        .execute(&state.db)
+        .await
+        .ok();
+    let device_ids: Vec<i64> =
+        sqlx::query_scalar("SELECT device_id FROM device_tracked_apps WHERE tracked_app_id = ?")
+            .bind(app.id)
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default();
+    for device_id in device_ids {
+        crate::handlers::devices::add_to_allowlist(state, device_id, package_name).await;
+    }
+}
+
+async fn publish_pending(state: &AppState, app: &TrackedApp) -> Result<(), String> {
+    let Some(file_path) = app.pending_release_file_path.clone() else {
+        return Ok(());
+    };
+    let release = StagedRelease {
+        tag: app.pending_release_tag.clone().unwrap_or_default(),
+        asset_id: app.pending_release_asset_id,
+        file_path,
+        apk: app
+            .pending_apk()
+            .ok_or_else(|| "APK couldn't be read".to_string()),
+    };
+    publish(state, app, release).await
+}
+
+/// Publishes every pending release whose hold period has run out.
+async fn publish_due_releases(state: &AppState) {
+    let due = sqlx::query_as::<_, TrackedApp>(
+        "SELECT * FROM tracked_apps WHERE pending_publish_after IS NOT NULL \
+         AND pending_publish_after <= datetime('now')",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    for app in due {
+        if let Err(e) = publish_pending(state, &app).await {
+            tracing::warn!("publishing held release of '{}' failed: {e}", app.name);
+        }
+    }
+}
+
+/// Reads the live release of any app that has one but hasn't been read yet - every app cached
+/// before the review step existed. Pins the signing key from it, so those apps' next update is
+/// checked against the key their phones already have rather than treated as brand new.
+async fn backfill_release_info(state: &AppState) {
+    let apps = sqlx::query_as::<_, TrackedApp>(
+        "SELECT * FROM tracked_apps WHERE latest_release_file_path IS NOT NULL \
+         AND latest_apk_json IS NULL",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    for app in apps {
+        let Some(path) = &app.latest_release_file_path else {
+            continue;
+        };
+        let apk = match analyze_file(path).await {
+            Ok(apk) => apk,
+            Err(e) => {
+                tracing::warn!("couldn't read cached APK of '{}': {e}", app.name);
+                continue;
+            }
+        };
+        sqlx::query(
+            "UPDATE tracked_apps SET latest_apk_json = ?, \
+             signing_cert_sha256 = COALESCE(signing_cert_sha256, ?) WHERE id = ?",
+        )
+        .bind(serde_json::to_string(&apk).ok())
+        .bind(&apk.cert_sha256)
+        .bind(app.id)
+        .execute(&state.db)
+        .await
+        .ok();
+        fill_package_name(state, &app, &apk.package_name).await;
+    }
+}
+
+/// Checks one GitHub-sourced app's repo for a new release and, if it's one not seen before
+/// (not the live one, the pending one, or one the parent rejected), downloads it and hands it to
+/// `stage_release`. A no-op for manual-source apps - those only ever change via
+/// `upload_tracked_app_release`. Used by both the scheduled loop and the admin's manual "Check
+/// now" button, so they can never drift apart.
 async fn sync_one_app(state: &AppState, app: &TrackedApp) -> Result<(), String> {
     if app.source_type != "github" {
         return Ok(());
@@ -99,13 +412,20 @@ async fn sync_one_app(state: &AppState, app: &TrackedApp) -> Result<(), String> 
     let asset = pick_asset(&release, app.asset_pattern.as_deref())
         .ok_or_else(|| "no matching .apk asset in the latest release".to_string())?;
 
-    // Compared as a (tag, asset id) pair, not just the tag - a rolling tag
-    // (e.g. this project's own "pre-release") never changes name between
-    // pushes, but GitHub gives the replaced asset a new id every time, so
-    // this still correctly detects a new build even when the tag doesn't.
-    if Some(&release.tag_name) == app.latest_release_tag.as_ref()
-        && Some(asset.id) == app.latest_release_asset_id
-    {
+    // Compared as a (tag, asset id) pair, not just the tag - a rolling tag (e.g. this project's
+    // own "pre-release") never changes name between pushes, but GitHub gives the replaced asset a
+    // new id every time, so this still correctly detects a new build even when the tag doesn't.
+    let key = release_key(&release.tag_name, Some(asset.id));
+    let seen = [
+        app.latest_release_tag
+            .as_deref()
+            .map(|t| release_key(t, app.latest_release_asset_id)),
+        app.pending_release_tag
+            .as_deref()
+            .map(|t| release_key(t, app.pending_release_asset_id)),
+        app.rejected_release_key.clone(),
+    ];
+    if seen.iter().flatten().any(|k| k == &key) {
         return Ok(());
     }
 
@@ -132,35 +452,28 @@ async fn sync_one_app(state: &AppState, app: &TrackedApp) -> Result<(), String> 
         .await
         .map_err(|e| e.to_string())?;
 
-    if let Some(old_path) = &app.latest_release_file_path {
-        if old_path != &file_path {
-            tokio::fs::remove_file(old_path).await.ok();
-        }
-    }
-
-    sqlx::query(
-        "UPDATE tracked_apps SET latest_release_tag = ?, latest_release_asset_id = ?, \
-         latest_release_file_path = ? WHERE id = ?",
-    )
-    .bind(&release.tag_name)
-    .bind(asset.id)
-    .bind(&file_path)
-    .bind(app.id)
-    .execute(&state.db)
-    .await
-    .map_err(|e| e.to_string())?;
-
-    Ok(())
+    let apk = analyze_file(&file_path).await;
+    let staged = StagedRelease {
+        tag: release.tag_name.clone(),
+        asset_id: Some(asset.id),
+        file_path,
+        apk,
+    };
+    stage_release(state, app, staged, false).await
 }
 
-/// Background task: checks every enabled tracked app on a fixed interval.
-/// One app's failure (bad repo, rate-limited, network blip) never blocks the
-/// others or crashes the loop - logged and retried next cycle. A no-op per
+/// Background task: checks every enabled tracked app on a fixed interval, after publishing any
+/// held release whose wait is over. One app's failure (bad repo, rate-limited, network blip)
+/// never blocks the others or crashes the loop - logged and retried next cycle. A no-op per
 /// iteration for manual-source apps (`sync_one_app` returns early for them).
 pub async fn run_scheduled_tracked_app_sync(state: AppState) {
+    backfill_release_info(&state).await;
+
     let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
     loop {
         interval.tick().await;
+
+        publish_due_releases(&state).await;
 
         let apps = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE enabled = 1")
             .fetch_all(&state.db)
@@ -186,6 +499,7 @@ fn random_label() -> String {
 #[template(path = "apps_list.html")]
 struct AppsListTemplate {
     title: String,
+    review_count: usize,
     tracked: Vec<TrackedApp>,
 }
 
@@ -200,6 +514,7 @@ pub async fn list_apps(State(state): State<AppState>) -> impl IntoResponse {
     Html(
         AppsListTemplate {
             title: "Apps".to_string(),
+            review_count: tracked.iter().filter(|a| a.needs_review()).count(),
             tracked,
         }
         .render()
@@ -275,19 +590,25 @@ pub async fn create_tracked_app(
         None
     };
     let include_prereleases = source_type == "github" && fields.contains_key("include_prereleases");
+    let hold_days = if source_type == "github" {
+        parse_hold_days(&field("hold_days"))
+    } else {
+        0
+    };
 
     // package_name is never taken from admin input (see update_tracked_app's own doc comment) -
     // a brand-new app can't have one known yet anyway, since nothing's been installed to detect
     // it from. Always starts empty; device_api::status backfills it automatically.
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO tracked_apps (name, package_name, source_type, github_repo, asset_pattern, include_prereleases) \
-         VALUES (?, '', ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO tracked_apps (name, package_name, source_type, github_repo, asset_pattern, include_prereleases, hold_days) \
+         VALUES (?, '', ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(field("name").trim())
     .bind(source_type)
     .bind(&github_repo)
     .bind(&asset_pattern)
     .bind(include_prereleases)
+    .bind(hold_days)
     .fetch_one(&state.db)
     .await
     .expect("failed to create tracked app");
@@ -426,24 +747,103 @@ pub async fn upload_tracked_app_release(
         .await;
     }
 
-    if let Some(old_path) = &app.latest_release_file_path {
-        if old_path != &file_path {
-            tokio::fs::remove_file(old_path).await.ok();
-        }
-    }
+    sqlx::query("UPDATE tracked_apps SET last_checked_at = datetime('now') WHERE id = ?")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .ok();
 
-    sqlx::query(
-        "UPDATE tracked_apps SET latest_release_tag = ?, latest_release_asset_id = NULL, \
-         latest_release_file_path = ?, last_checked_at = datetime('now') WHERE id = ?",
-    )
-    .bind(&release_label)
-    .bind(&file_path)
+    let apk = analyze_file(&file_path).await;
+    let staged = StagedRelease {
+        tag: release_label,
+        asset_id: None,
+        file_path,
+        apk,
+    };
+    let error = stage_release(&state, &app, staged, true).await.err();
+    render_detail(&state, id, error).await
+}
+
+/// Publishes the pending release now - the parent's approval of a held release, or skipping
+/// the rest of its hold period.
+pub async fn publish_pending_release(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    let Some(app) = app else {
+        return (axum::http::StatusCode::NOT_FOUND, "App not found").into_response();
+    };
+    let error = publish_pending(&state, &app).await.err();
+    render_detail(&state, id, error).await
+}
+
+/// Throws the pending release away and remembers it, so the hourly check doesn't download and
+/// offer the same one again. The next new release upstream is offered as normal.
+pub async fn reject_pending_release(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    let Some(app) = app else {
+        return Redirect::to("/apps");
+    };
+    if let Some(path) = &app.pending_release_file_path {
+        tokio::fs::remove_file(path).await.ok();
+    }
+    let rejected = app
+        .pending_release_tag
+        .as_deref()
+        .map(|t| release_key(t, app.pending_release_asset_id));
+    sqlx::query(&format!(
+        "UPDATE tracked_apps SET rejected_release_key = COALESCE(?, rejected_release_key), \
+         {CLEAR_PENDING} WHERE id = ?"
+    ))
+    .bind(rejected)
     .bind(id)
     .execute(&state.db)
     .await
     .ok();
 
-    render_detail(&state, id, None).await
+    Redirect::to(&format!("/apps/tracked/{id}"))
+}
+
+/// The longest hold period the form accepts - long enough for any real "wait and see", short
+/// enough that a typo can't silently freeze an app's updates for a year.
+const MAX_HOLD_DAYS: i64 = 30;
+
+fn parse_hold_days(input: &str) -> i64 {
+    input
+        .trim()
+        .parse::<i64>()
+        .unwrap_or(0)
+        .clamp(0, MAX_HOLD_DAYS)
+}
+
+pub async fn set_hold_days(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Form(form): Form<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let hold_days = parse_hold_days(form.get("hold_days").map(String::as_str).unwrap_or(""));
+    sqlx::query("UPDATE tracked_apps SET hold_days = ? WHERE id = ?")
+        .bind(hold_days)
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    Redirect::to(&format!("/apps/tracked/{id}"))
 }
 
 /// Lets an admin fix any of a tracked app's identifying details after creation - there was
@@ -593,7 +993,13 @@ pub async fn delete_tracked_app(
         return Redirect::to(&format!("/apps/tracked/{id}"));
     }
 
-    if let Some(path) = &app.latest_release_file_path {
+    for path in [
+        &app.latest_release_file_path,
+        &app.pending_release_file_path,
+    ]
+    .into_iter()
+    .flatten()
+    {
         tokio::fs::remove_file(path).await.ok();
     }
 
@@ -604,4 +1010,76 @@ pub async fn delete_tracked_app(
         .ok();
 
     Redirect::to("/apps")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn apk(version_code: i64, permissions: &[&str], cert: &str) -> ApkInfo {
+        ApkInfo {
+            package_name: "org.example.app".to_string(),
+            version_code,
+            permissions: permissions.iter().map(|p| p.to_string()).collect(),
+            cert_sha256: Some(cert.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ordinary_update_needs_no_review() {
+        let live = apk(1, &["android.permission.INTERNET"], "aa");
+        let new = Ok(apk(2, &["android.permission.INTERNET"], "aa"));
+        assert!(review_reasons(Some(&live), Some("aa"), true, &new, false).is_empty());
+    }
+
+    #[test]
+    fn new_app_needs_review_unless_uploaded() {
+        let new = Ok(apk(1, &[], "aa"));
+        assert_eq!(review_reasons(None, None, false, &new, false).len(), 1);
+        assert!(review_reasons(None, None, false, &new, true).is_empty());
+    }
+
+    #[test]
+    fn flags_key_change_downgrade_and_new_permissions() {
+        let live = apk(5, &["android.permission.ACCESS_COARSE_LOCATION"], "aa");
+        let new = Ok(apk(
+            4,
+            &[
+                "android.permission.ACCESS_COARSE_LOCATION",
+                "android.permission.ACCESS_FINE_LOCATION",
+                "android.permission.VIBRATE",
+            ],
+            "bb",
+        ));
+        let reasons = review_reasons(Some(&live), Some("aa"), true, &new, true);
+        assert_eq!(reasons.len(), 3, "{reasons:?}");
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r == "Asks for new access: Location.")
+        );
+    }
+
+    #[test]
+    fn flags_missing_arm64_and_unreadable_apk() {
+        let mut new = apk(1, &[], "aa");
+        new.native_abis = vec!["armeabi-v7a".to_string(), "x86".to_string()];
+        let reasons = review_reasons(None, Some("aa"), true, &Ok(new), false);
+        assert_eq!(reasons.len(), 1);
+
+        let unreadable = Err("not a valid APK/zip file".to_string());
+        assert_eq!(
+            review_reasons(None, Some("aa"), true, &unreadable, false).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn hold_days_are_clamped() {
+        assert_eq!(parse_hold_days("2"), 2);
+        assert_eq!(parse_hold_days("-3"), 0);
+        assert_eq!(parse_hold_days("400"), MAX_HOLD_DAYS);
+        assert_eq!(parse_hold_days("soon"), 0);
+    }
 }

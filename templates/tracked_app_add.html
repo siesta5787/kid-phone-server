@@ -38,6 +38,10 @@
                 Include pre-releases
             </label>
             <p class="hint">Needed for a repo that only ever publishes to a rolling/pre-release tag (like this project's own launcher) - otherwise a repo with no full releases will never be found.</p>
+
+            <label for="hold_days">Wait before updating phones (days)</label>
+            <input type="number" id="hold_days" name="hold_days" min="0" max="30" value="2">
+            <p class="hint">Each new release waits this long before going to phones, so a broken or bad release has time to be noticed and pulled. Set 0 for your own apps. The first release, and any release that changes signing key or asks for new access, always waits for your review.</p>
         </div>
 
         <button type="submit">Add app</button>

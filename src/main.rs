@@ -1,3 +1,4 @@
+mod apk;
 mod box_api;
 mod dns_engine;
 mod handlers;
@@ -227,6 +228,18 @@ async fn main() {
         .route(
             "/apps/tracked/{id}/forget-package-name",
             post(handlers::tracked_apps::forget_package_name),
+        )
+        .route(
+            "/apps/tracked/{id}/publish-pending",
+            post(handlers::tracked_apps::publish_pending_release),
+        )
+        .route(
+            "/apps/tracked/{id}/reject-pending",
+            post(handlers::tracked_apps::reject_pending_release),
+        )
+        .route(
+            "/apps/tracked/{id}/hold-days",
+            post(handlers::tracked_apps::set_hold_days),
         )
         .route(
             "/apps/tracked/{id}/delete",

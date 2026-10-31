@@ -18,6 +18,36 @@
     <p class="hint">This is the launcher app itself - it's always installed on every device and can't be removed from this list.</p>
     {% endif %}
 
+    {% if app.has_pending() %}
+    <div class="card">
+        {% if app.needs_review() %}
+        <h2>Waiting for your review</h2>
+        {% else %}
+        <h2>Update waiting</h2>
+        {% endif %}
+        <p>New release: <strong>{% if let Some(tag) = app.pending_release_tag %}{{ tag }}{% endif %}</strong>{% if let Some(found) = app.pending_found_at %} <span class="subtitle">(found {{ found }})</span>{% endif %}</p>
+        {% if app.needs_review() %}
+        <div class="error">
+            {% for reason in app.pending_reasons() %}
+            <p>{{ reason }}</p>
+            {% endfor %}
+        </div>
+        {% else if let Some(after) = app.pending_publish_after %}
+        <p>Goes to phones automatically after <strong>{{ after }}</strong> (UTC), unless you reject it first. The wait gives time for a broken or bad release to be noticed and pulled.</p>
+        {% endif %}
+        {% if let Some(apk) = app.pending_apk() %}
+        {% include "partials/apk_facts.html" %}
+        {% endif %}
+        <form method="post" action="/apps/tracked/{{ app.id }}/publish-pending" style="display:inline;">
+            <button type="submit">{% if app.needs_review() %}Approve and publish{% else %}Publish now{% endif %}</button>
+        </form>
+        <form method="post" action="/apps/tracked/{{ app.id }}/reject-pending" style="display:inline;">
+            <button type="submit" class="button-secondary">Reject</button>
+        </form>
+        <p class="hint">Rejecting deletes this download. It won't be offered again; the next new release will be.</p>
+    </div>
+    {% endif %}
+
     <div class="card">
         <h2>Details</h2>
         <form method="post" action="/apps/tracked/{{ app.id }}/edit">
@@ -45,9 +75,12 @@
         <p>Source: manually uploaded</p>
         {% endif %}
         {% if let Some(tag) = app.latest_release_tag %}
-        <p>Current synced release: <strong>{{ tag }}</strong></p>
+        <p>Release on phones: <strong>{{ tag }}</strong></p>
+        {% if let Some(apk) = app.latest_apk() %}
+        {% include "partials/apk_facts.html" %}
+        {% endif %}
         {% else %}
-        <p class="subtitle">No release synced yet.</p>
+        <p class="subtitle">No release published yet.</p>
         {% endif %}
         {% if app.package_name.is_empty() %}
         <p class="subtitle">Android package: not detected yet - fills in automatically the first time a device reports this app newly installed.</p>
@@ -68,6 +101,16 @@
             <button type="submit">Check now</button>
         </form>
     </div>
+
+    {% if !app.is_launcher %}
+    <div class="card">
+        <form method="post" action="/apps/tracked/{{ app.id }}/hold-days">
+            <label for="hold_days">Wait before updating phones (days)</label>
+            <input type="number" id="hold_days" name="hold_days" min="0" max="30" value="{{ app.hold_days }}" onchange="this.form.submit()">
+            <p class="hint">A new release waits this long before going to phones, so a broken or bad release has time to be noticed and pulled. 0 means no wait. Releases that need your review always wait for you, whatever this says.</p>
+        </form>
+    </div>
+    {% endif %}
 
     <div class="card">
         <form method="post" action="/apps/tracked/{{ app.id }}/include-prereleases">

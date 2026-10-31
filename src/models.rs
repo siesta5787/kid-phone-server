@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::apk::ApkInfo;
+
 #[derive(sqlx::FromRow, Clone)]
 pub struct AdminUser {
     pub id: i64,
@@ -113,6 +115,44 @@ pub struct TrackedApp {
     /// is the launcher itself, which can't be deleted or deselected on any
     /// device.
     pub is_launcher: bool,
+    /// See migrations/0022_app_release_review.sql for this and the fields below.
+    pub latest_apk_json: Option<String>,
+    pub signing_cert_sha256: Option<String>,
+    pub pending_release_tag: Option<String>,
+    pub pending_release_asset_id: Option<i64>,
+    pub pending_release_file_path: Option<String>,
+    pub pending_apk_json: Option<String>,
+    pub pending_review_reasons: Option<String>,
+    pub pending_publish_after: Option<String>,
+    pub pending_found_at: Option<String>,
+    pub rejected_release_key: Option<String>,
+    pub hold_days: i64,
+}
+
+impl TrackedApp {
+    pub fn latest_apk(&self) -> Option<ApkInfo> {
+        serde_json::from_str(self.latest_apk_json.as_deref()?).ok()
+    }
+
+    pub fn pending_apk(&self) -> Option<ApkInfo> {
+        serde_json::from_str(self.pending_apk_json.as_deref()?).ok()
+    }
+
+    pub fn has_pending(&self) -> bool {
+        self.pending_release_file_path.is_some()
+    }
+
+    pub fn pending_reasons(&self) -> Vec<String> {
+        self.pending_review_reasons
+            .as_deref()
+            .and_then(|j| serde_json::from_str(j).ok())
+            .unwrap_or_default()
+    }
+
+    /// A pending release the parent has to approve, as opposed to one just waiting out its hold.
+    pub fn needs_review(&self) -> bool {
+        self.has_pending() && self.pending_publish_after.is_none()
+    }
 }
 
 /// Singleton row (id always 1) - see migrations/0009_dns_filter.sql.

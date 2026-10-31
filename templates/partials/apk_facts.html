@@ -1,0 +1,17 @@
+{# Expects `apk` (crate::apk::ApkInfo) in scope. #}
+<p>Version {{ apk.version_label() }}{% if let Some(sdk) = apk.min_sdk %} &middot; needs Android API {{ sdk }}+{% endif %} &middot; <span class="subtitle">{{ apk.package_name }}</span></p>
+{% let labels = apk.sensitive_labels() %}
+{% if labels.is_empty() %}
+<p>Sensitive access: none</p>
+{% else %}
+<p>Sensitive access: {% for label in labels %}{{ label }}{% if !loop.last %}, {% endif %}{% endfor %}</p>
+{% endif %}
+<p class="subtitle">Signing key {{ apk.cert_short() }}</p>
+<details>
+    <summary class="subtitle" style="cursor:pointer;">All {{ apk.permissions.len() }} permissions</summary>
+    <ul class="subtitle">
+        {% for permission in apk.permissions %}
+        <li>{{ permission }}</li>
+        {% endfor %}
+    </ul>
+</details>
