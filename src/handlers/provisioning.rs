@@ -32,10 +32,12 @@ use crate::models::{Device, ProvisioningSettings};
 ///
 /// The admin component and signature checksum are effectively constant -
 /// they only change if the receiver class is renamed or the signing key is
-/// ever rotated, not per release. The download location is the `kids-launcher-mdm`
-/// repo's rolling `pre-release` GitHub Release tag (`allowUpdates: true`,
-/// always the latest `master` build - see that repo's CLAUDE.md), so this
-/// QR code stays valid across every new build with nothing to regenerate.
+/// ever rotated, not per release. The download location is GitHub's
+/// `releases/latest/download/` redirect for the `kids-launcher-mdm` repo, which
+/// always resolves to the newest non-prerelease release - every `master` build
+/// is published as one since launcher v0.52.5 (see that repo's CLAUDE.md) - so
+/// this QR code stays valid across every new build with nothing to regenerate.
+/// (Before that it pointed at a rolling `pre-release` prerelease tag.)
 const ADMIN_COMPONENT: &str =
     "com.kidslauncher.mdm/com.kidslauncher.mdm.server.MdmDeviceAdminReceiver";
 
@@ -50,7 +52,7 @@ const ADMIN_COMPONENT: &str =
 const SIGNATURE_CHECKSUM: &str = "wQHG9Et-zCevDOi0KoFkfxWmGiZ0M7hFm4uVT9TLTas";
 
 const APK_DOWNLOAD_URL: &str =
-    "https://github.com/siesta5787/kids-launcher-mdm/releases/download/pre-release/app-release.apk";
+    "https://github.com/siesta5787/kids-launcher-mdm/releases/latest/download/app-release.apk";
 
 /// android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE's contents - Android's own
 /// documented mechanism for passing arbitrary DPC-defined data through zero-touch/QR/NFC
