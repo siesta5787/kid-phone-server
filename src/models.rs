@@ -46,6 +46,34 @@ pub struct DevicePolicy {
     /// just whatever was last configured, ignored until this is turned on. See
     /// `handlers::schedules`.
     pub custom_schedule_enabled: bool,
+    /// A parent's "Lock now"/"Unlock now" - `"lock"`, `"unlock"`, or None to follow the schedule.
+    /// Use [DevicePolicy::active_lock_override] rather than reading this directly, since it may
+    /// already have expired. See migrations/0023_lock_override.sql.
+    pub lock_override: Option<String>,
+    /// When [Self::lock_override] lapses back to the schedule (epoch millis), None = no end time.
+    pub lock_override_until_ms: Option<i64>,
+}
+
+impl DevicePolicy {
+    /// [Self::lock_override] and its end time, or None if there isn't one or it has expired.
+    pub fn active_lock_override(&self, now_ms: i64) -> Option<(&str, Option<i64>)> {
+        let mode = self.lock_override.as_deref()?;
+        if mode != "lock" && mode != "unlock" {
+            return None;
+        }
+        match self.lock_override_until_ms {
+            Some(until) if now_ms >= until => None,
+            until => Some((mode, until)),
+        }
+    }
+}
+
+/// Current wall-clock time as Unix epoch milliseconds.
+pub fn now_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Singleton (always `id = 1`) - the schedule every device follows unless it has its own
@@ -317,6 +345,12 @@ pub struct PolicyResponse {
     /// report confirms the package is actually gone, so the instruction survives being missed by
     /// any single sync cycle.
     pub packages_to_uninstall: Vec<String>,
+    /// A parent's "Lock now" (`"lock"`) / "Unlock now" (`"unlock"`), beating the schedule above
+    /// until `lock_override_until_ms` (epoch millis, checked against the phone's own clock so it
+    /// lapses on time offline; None = until the parent clears it). None = follow the schedule.
+    /// Already-expired overrides are never sent. See `handlers::devices::set_lock_override`.
+    pub lock_override: Option<String>,
+    pub lock_override_until_ms: Option<i64>,
 }
 
 /// The oldest undelivered [DeviceCommand] for this device, if any - `policy()`
@@ -511,4 +545,39 @@ pub struct DeviceBrowserHistoryEntry {
     pub visited_at: i64,
     pub device_created_at: i64,
     pub received_at: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DevicePolicy;
+
+    fn with_override(mode: Option<&str>, until: Option<i64>) -> DevicePolicy {
+        DevicePolicy {
+            lock_override: mode.map(str::to_string),
+            lock_override_until_ms: until,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn lock_override_expires_at_its_end_time() {
+        let p = with_override(Some("lock"), Some(1_000));
+        assert_eq!(p.active_lock_override(999), Some(("lock", Some(1_000))));
+        assert_eq!(p.active_lock_override(1_000), None);
+    }
+
+    #[test]
+    fn lock_override_without_end_time_never_expires() {
+        let p = with_override(Some("unlock"), None);
+        assert_eq!(p.active_lock_override(i64::MAX), Some(("unlock", None)));
+    }
+
+    #[test]
+    fn no_or_unknown_lock_override_is_none() {
+        assert_eq!(with_override(None, None).active_lock_override(0), None);
+        assert_eq!(
+            with_override(Some("bogus"), None).active_lock_override(0),
+            None
+        );
+    }
 }

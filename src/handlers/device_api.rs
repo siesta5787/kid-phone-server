@@ -11,6 +11,7 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::AppState;
+use crate::models::now_epoch_ms;
 use crate::models::{
     BrowserHistoryUpload, CommandResultRequest, Device, DeviceCommand, DevicePolicy,
     DnsBlocklistCategory, DnsEventReport, DnsFilterSettings, EnrollRequest, EnrollResponse,
@@ -169,6 +170,12 @@ pub async fn policy(
     .await
     .unwrap_or_default();
 
+    let (lock_override, lock_override_until_ms) = match policy.active_lock_override(now_epoch_ms())
+    {
+        Some((mode, until)) => (Some(mode.to_string()), until),
+        None => (None, None),
+    };
+
     Json(PolicyResponse {
         allowlist,
         weekday_start_minutes,
@@ -187,6 +194,8 @@ pub async fn policy(
         dns_filter_version,
         dns_upstream_provider,
         packages_to_uninstall,
+        lock_override,
+        lock_override_until_ms,
     })
     .into_response()
 }

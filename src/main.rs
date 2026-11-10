@@ -171,6 +171,10 @@ async fn main() {
             post(handlers::devices::update_policy),
         )
         .route(
+            "/devices/{id}/lock-override",
+            post(handlers::devices::set_lock_override),
+        )
+        .route(
             "/devices/{id}/regenerate-code",
             post(handlers::devices::regenerate_code),
         )

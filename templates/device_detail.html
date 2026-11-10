@@ -25,7 +25,7 @@
     <div class="card">
         <h2>Status</h2>
         {% if let Some(status) = latest_status %}
-        <p>Lock state: <strong>{{ status.lock_reason }}</strong></p>
+        <p>Lock state: <strong>{{ lock_state_label }}</strong></p>
         {% if let Some(v) = status.app_version %}
         <p>App version: {{ v }}</p>
         {% endif %}
@@ -33,6 +33,34 @@
         {% else %}
         <p class="subtitle">No status reported yet.</p>
         {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Screen time lock</h2>
+        {% if let Some(mode) = lock_override %}
+        {% if mode == "lock" %}
+        <p><strong>Locked by you</strong>{% if !lock_override_remaining.is_empty() %} {{ lock_override_remaining }}{% else %} until you change it{% endif %}, regardless of the schedule.</p>
+        {% else %}
+        <p><strong>Unlocked by you</strong>{% if !lock_override_remaining.is_empty() %} {{ lock_override_remaining }}{% else %} until you change it{% endif %}, regardless of the schedule.</p>
+        {% endif %}
+        <form method="post" action="/devices/{{ device.id }}/lock-override">
+            <input type="hidden" name="action" value="schedule">
+            <button type="submit" class="button-small button-secondary">Back to schedule</button>
+        </form>
+        {% else %}
+        <p class="subtitle">Following the <a href="/schedules?device={{ device.id }}">schedule</a>. Lock or unlock it right now instead - the phone picks this up within a few seconds if it's online. The unlock code on the phone still works while it's locked.</p>
+        {% endif %}
+        <form method="post" action="/devices/{{ device.id }}/lock-override" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+            <select name="duration_minutes" aria-label="For how long">
+                <option value="30">for 30 minutes</option>
+                <option value="60" selected>for 1 hour</option>
+                <option value="120">for 2 hours</option>
+                <option value="240">for 4 hours</option>
+                <option value="">until I change it</option>
+            </select>
+            <button type="submit" name="action" value="lock" class="button-small">Lock now</button>
+            <button type="submit" name="action" value="unlock" class="button-small button-secondary">Unlock now</button>
+        </form>
     </div>
     {% endif %}
 

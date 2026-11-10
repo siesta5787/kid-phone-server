@@ -5,7 +5,7 @@ use axum::{Extension, Form};
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::models::{Device, DevicePolicy, DeviceStatus, InstalledApp, TrackedApp};
+use crate::models::{Device, DevicePolicy, DeviceStatus, InstalledApp, TrackedApp, now_epoch_ms};
 use crate::security::{self, CurrentAdmin};
 
 /// How long a freshly-generated enrollment code stays valid before it must
@@ -218,6 +218,35 @@ struct DeviceDetailTemplate {
     quick_control_bluetooth: bool,
     quick_control_brightness: bool,
     latest_status: Option<DeviceStatus>,
+    /// The parent's "Lock now"/"Unlock now" currently in effect (`"lock"`/`"unlock"`), None when
+    /// following the schedule (including once an override has expired).
+    lock_override: Option<String>,
+    /// e.g. "for another 45 min" - empty when the override has no end time.
+    lock_override_remaining: String,
+    /// Plain-language lock state from the last status report ("Locked (bedtime)" etc).
+    lock_state_label: String,
+}
+
+/// Turns the device's reported `LockReason` enum name into something a parent can read.
+fn lock_reason_label(reason: &str) -> String {
+    match reason {
+        "NONE" => "Unlocked".to_string(),
+        "BEDTIME" => "Locked (bedtime)".to_string(),
+        "SCREEN_TIME" => "Locked (outside screen time hours)".to_string(),
+        "PARENT" => "Locked (by a parent)".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// "for another 1 h 5 min" style countdown for the device page, rounded up to the minute.
+fn remaining_label(until_ms: i64, now_ms: i64) -> String {
+    let minutes = ((until_ms - now_ms).max(0) + 59_999) / 60_000;
+    let (h, m) = (minutes / 60, minutes % 60);
+    match (h, m) {
+        (0, m) => format!("for another {m} min"),
+        (h, 0) => format!("for another {h} h"),
+        (h, m) => format!("for another {h} h {m} min"),
+    }
 }
 
 pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
@@ -388,6 +417,21 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         .unwrap_or(false);
     let any_app_installing = apps.iter().any(|a| a.is_installing);
 
+    let now_ms = now_epoch_ms();
+    let (lock_override, lock_override_remaining) = match policy.active_lock_override(now_ms) {
+        Some((mode, until)) => (
+            Some(mode.to_string()),
+            until
+                .map(|u| remaining_label(u, now_ms))
+                .unwrap_or_default(),
+        ),
+        None => (None, String::new()),
+    };
+    let lock_state_label = latest_status
+        .as_ref()
+        .map(|s| lock_reason_label(&s.lock_reason))
+        .unwrap_or_default();
+
     Html(
         DeviceDetailTemplate {
             title: device.name.clone(),
@@ -401,6 +445,9 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             device,
             apps,
             latest_status,
+            lock_override,
+            lock_override_remaining,
+            lock_state_label,
         }
         .render()
         .unwrap(),
@@ -705,6 +752,62 @@ pub async fn update_policy(
     // for ring/lock, rather than waiting out the rest of the background poll interval - the nudge
     // itself carries no data, the device just re-fetches /api/devices/policy on it, so this reuses
     // the exact same dispatch path as a normal scheduled sync.
+    let _ = state.command_notify.send(id);
+
+    Redirect::to(&format!("/devices/{id}"))
+}
+
+/// Longest "Lock now"/"Unlock now" duration accepted from the form - anything longer should just
+/// use "until I change it" instead.
+const MAX_LOCK_OVERRIDE_MINUTES: i64 = 7 * 24 * 60;
+
+#[derive(Deserialize)]
+pub struct LockOverrideForm {
+    /// `lock`, `unlock`, or `schedule` (clear the override and follow the schedule again).
+    action: String,
+    /// Blank = until the parent changes it.
+    #[serde(default)]
+    duration_minutes: String,
+}
+
+/// The device page's "Lock now" / "Unlock now" / "Back to schedule" buttons. Overrides the
+/// bedtime/screen-time schedule for this one device, for a set time or until changed - it's only
+/// about the screen-time lock, not the app allowlist or anything else. Delivered the same way as
+/// any policy save: an SSE nudge, then the phone re-fetches `/api/devices/policy` (see
+/// `PolicyResponse.lock_override`), and the phone checks the end time against its own clock so it
+/// goes back to the schedule on time even if it's offline by then.
+pub async fn set_lock_override(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Extension(_admin): Extension<CurrentAdmin>,
+    Form(form): Form<LockOverrideForm>,
+) -> impl IntoResponse {
+    let (mode, until_ms) = match form.action.as_str() {
+        "lock" | "unlock" => {
+            let until_ms = form
+                .duration_minutes
+                .trim()
+                .parse::<i64>()
+                .ok()
+                .filter(|m| (1..=MAX_LOCK_OVERRIDE_MINUTES).contains(m))
+                .map(|m| now_epoch_ms() + m * 60_000);
+            (Some(form.action.as_str()), until_ms)
+        }
+        "schedule" => (None, None),
+        _ => return Redirect::to(&format!("/devices/{id}")),
+    };
+
+    sqlx::query(
+        "UPDATE device_policy SET lock_override = ?, lock_override_until_ms = ?, \
+         updated_at = datetime('now') WHERE device_id = ?",
+    )
+    .bind(mode)
+    .bind(until_ms)
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .ok();
+
     let _ = state.command_notify.send(id);
 
     Redirect::to(&format!("/devices/{id}"))
