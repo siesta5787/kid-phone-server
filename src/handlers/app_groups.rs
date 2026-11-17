@@ -254,7 +254,11 @@ pub async fn show_app_groups(
         .and_then(|j| serde_json::from_str::<Vec<InstalledApp>>(j).ok())
         .unwrap_or_default()
         .into_iter()
-        .filter(|a| allowlist.as_ref().is_none_or(|al| al.contains(&a.package_name)))
+        .filter(|a| {
+            allowlist
+                .as_ref()
+                .is_none_or(|al| al.contains(&a.package_name))
+        })
         .collect();
     candidates.sort_by_key(|a| a.label.to_lowercase());
 
