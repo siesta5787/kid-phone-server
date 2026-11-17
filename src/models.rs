@@ -101,6 +101,49 @@ pub struct DeviceStatus {
     pub app_version_code: Option<i64>,
     pub offline_override_used: bool,
     pub reported_at: String,
+    /// Whether the launcher has Android's usage access (needed to count app-group time limits).
+    /// None = a launcher too old to report it. See migrations/0024_app_groups.sql.
+    pub usage_access_granted: Option<bool>,
+}
+
+/// A parent-named set of apps on one device sharing one daily limit, allowed-hours window and
+/// pause/allow override - see migrations/0024_app_groups.sql and `handlers::app_groups`.
+#[derive(sqlx::FromRow, Clone, Default)]
+pub struct AppGroup {
+    pub id: i64,
+    pub device_id: i64,
+    pub name: String,
+    pub packages_json: String,
+    pub daily_limit_minutes: Option<i64>,
+    pub allowed_start_minutes: Option<i64>,
+    pub allowed_end_minutes: Option<i64>,
+    /// `"pause"`, `"allow"`, or None. Use [AppGroup::active_override] - it may have expired.
+    pub override_mode: Option<String>,
+    pub override_until_ms: Option<i64>,
+    pub used_minutes: Option<i64>,
+    pub usage_day: Option<String>,
+    pub blocked_reason: Option<String>,
+    pub usage_reported_at: Option<String>,
+    pub created_at: String,
+}
+
+impl AppGroup {
+    pub fn packages(&self) -> Vec<String> {
+        serde_json::from_str(&self.packages_json).unwrap_or_default()
+    }
+
+    /// [Self::override_mode] and its end time, or None if there isn't one or it has expired.
+    /// Same rules as [DevicePolicy::active_lock_override].
+    pub fn active_override(&self, now_ms: i64) -> Option<(&str, Option<i64>)> {
+        let mode = self.override_mode.as_deref()?;
+        if mode != "pause" && mode != "allow" {
+            return None;
+        }
+        match self.override_until_ms {
+            Some(until) if now_ms >= until => None,
+            until => Some((mode, until)),
+        }
+    }
 }
 
 #[derive(sqlx::FromRow, Clone)]
@@ -351,6 +394,42 @@ pub struct PolicyResponse {
     /// Already-expired overrides are never sent. See `handlers::devices::set_lock_override`.
     pub lock_override: Option<String>,
     pub lock_override_until_ms: Option<i64>,
+    /// This device's app groups - the phone suspends a group's apps while it's paused, outside
+    /// its allowed hours, or out of daily time. See [AppGroupPolicy] and `handlers::app_groups`.
+    pub app_groups: Vec<AppGroupPolicy>,
+}
+
+/// One [AppGroup] as the phone needs it. Already-expired overrides are never sent, same as
+/// `PolicyResponse::lock_override`.
+#[derive(Serialize)]
+pub struct AppGroupPolicy {
+    pub id: i64,
+    pub name: String,
+    pub packages: Vec<String>,
+    pub daily_limit_minutes: Option<i64>,
+    pub allowed_start_minutes: Option<i64>,
+    pub allowed_end_minutes: Option<i64>,
+    pub override_mode: Option<String>,
+    pub override_until_ms: Option<i64>,
+}
+
+impl AppGroupPolicy {
+    pub fn from_group(group: &AppGroup, now_ms: i64) -> Self {
+        let (override_mode, override_until_ms) = match group.active_override(now_ms) {
+            Some((mode, until)) => (Some(mode.to_string()), until),
+            None => (None, None),
+        };
+        Self {
+            id: group.id,
+            name: group.name.clone(),
+            packages: group.packages(),
+            daily_limit_minutes: group.daily_limit_minutes,
+            allowed_start_minutes: group.allowed_start_minutes,
+            allowed_end_minutes: group.allowed_end_minutes,
+            override_mode,
+            override_until_ms,
+        }
+    }
 }
 
 /// The oldest undelivered [DeviceCommand] for this device, if any - `policy()`
@@ -373,6 +452,23 @@ pub struct StatusReportRequest {
     #[serde(default)]
     pub offline_override_used: bool,
     pub location: Option<LocationReport>,
+    /// None from launchers older than app groups.
+    #[serde(default)]
+    pub usage_access_granted: Option<bool>,
+    #[serde(default)]
+    pub app_group_usage: Option<Vec<AppGroupUsageReport>>,
+}
+
+/// The phone's view of one app group right now - see `handlers::device_api::status`.
+#[derive(Deserialize)]
+pub struct AppGroupUsageReport {
+    pub group_id: i64,
+    /// None when the phone can't count time (no usage access).
+    pub used_minutes: Option<i64>,
+    /// The phone's local date `used_minutes` is for (YYYY-MM-DD).
+    pub day: String,
+    /// `"PAUSED"`, `"OUTSIDE_HOURS"`, `"TIME_UP"`, or None when the group's apps are usable.
+    pub blocked_reason: Option<String>,
 }
 
 /// Attached to a status report whenever the device has a location reading
@@ -549,7 +645,32 @@ pub struct DeviceBrowserHistoryEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::DevicePolicy;
+    use super::{AppGroup, DevicePolicy};
+
+    #[test]
+    fn app_group_override_expires_and_ignores_unknown_modes() {
+        let g = AppGroup {
+            override_mode: Some("pause".to_string()),
+            override_until_ms: Some(1_000),
+            ..Default::default()
+        };
+        assert_eq!(g.active_override(999), Some(("pause", Some(1_000))));
+        assert_eq!(g.active_override(1_000), None);
+        let bogus = AppGroup {
+            override_mode: Some("lock".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(bogus.active_override(0), None);
+    }
+
+    #[test]
+    fn app_group_packages_tolerates_bad_json() {
+        let g = AppGroup {
+            packages_json: "not json".to_string(),
+            ..Default::default()
+        };
+        assert!(g.packages().is_empty());
+    }
 
     fn with_override(mode: Option<&str>, until: Option<i64>) -> DevicePolicy {
         DevicePolicy {

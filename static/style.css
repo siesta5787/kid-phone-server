@@ -504,6 +504,42 @@ th {
     white-space: nowrap;
 }
 
+.app-status[data-blocked="true"] {
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+}
+
+.app-group-row {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.app-group-row:last-of-type {
+    margin-bottom: 8px;
+}
+
+.app-group-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.app-group-row .subtitle {
+    margin: 4px 0 8px;
+}
+
+.inline-controls {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.inline-controls select {
+    width: auto;
+    margin: 0;
+}
+
 .app-status[data-failed="true"] {
     background: var(--color-danger-bg);
     color: var(--color-danger);

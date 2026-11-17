@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container">
+    <div class="page-header">
+        <h1>App groups</h1>
+    </div>
+    <p class="subtitle"><a href="/devices/{{ device.id }}#app-groups">&larr; Back to {{ device.name }}</a></p>
+
+    <div class="card">
+        <p class="subtitle">Group apps together - like Streaming or Games - and set the rules once for the whole group. A daily limit is shared: 1 hour for Streaming means 1 hour across all of its apps combined, resetting at midnight. While a group is paused, outside its hours, or out of time, its apps stay installed but can't be opened. Apps that aren't in a group just follow the phone's normal schedule. Pause and Allow are on the device's own page.</p>
+        {% if !note.is_empty() %}
+        <div class="error">{{ note }}</div>
+        {% endif %}
+        <form method="post" action="/devices/{{ device.id }}/app-groups" class="inline-controls">
+            <input type="text" name="name" placeholder="New group name, e.g. Streaming" maxlength="40" required aria-label="New group name" style="flex:1; min-width:12em;">
+            <button type="submit" class="button-small">Add group</button>
+        </form>
+    </div>
+
+    {% for group in groups %}
+    <div class="card" id="group-{{ group.id }}">
+        <form method="post" action="/devices/{{ device.id }}/app-groups/{{ group.id }}">
+            <label for="name-{{ group.id }}">Group name</label>
+            <input type="text" id="name-{{ group.id }}" name="name" value="{{ group.name }}" maxlength="40" required>
+
+            <label for="limit-{{ group.id }}">Daily time limit, shared by every app in the group</label>
+            <select id="limit-{{ group.id }}" name="daily_limit_minutes" style="width:100%; padding:10px 12px; border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg); color:var(--color-text); margin-bottom:16px;">
+                <option value="" {% if group.no_limit %}selected{% endif %}>No limit</option>
+                {% for choice in group.limit_choices %}
+                <option value="{{ choice.minutes }}" {% if choice.selected %}selected{% endif %}>{{ choice.label }} a day</option>
+                {% endfor %}
+            </select>
+
+            <div class="schedule-grid">
+                <div>
+                    <label for="start-{{ group.id }}">Allowed from</label>
+                    <input type="time" id="start-{{ group.id }}" name="allowed_start" value="{{ group.allowed_start }}">
+                </div>
+                <div>
+                    <label for="end-{{ group.id }}">until</label>
+                    <input type="time" id="end-{{ group.id }}" name="allowed_end" value="{{ group.allowed_end }}">
+                </div>
+            </div>
+            <p class="subtitle">Leave both blank to allow these apps any time the phone itself is unlocked.</p>
+            <button type="button" class="button-small button-secondary" onclick="document.getElementById('start-{{ group.id }}').value='';document.getElementById('end-{{ group.id }}').value='';">Clear hours</button>
+
+            <label style="margin-top:16px;">Apps in this group</label>
+            {% if group.apps.is_empty() %}
+            <p class="subtitle">No apps to choose from yet - the phone hasn't reported its installed apps, or none are allowed on the device page.</p>
+            {% else %}
+            <div class="app-checkbox-list">
+                {% for app in group.apps %}
+                <label class="checkbox-row">
+                    <input type="checkbox" name="packages" value="{{ app.package_name }}" {% if app.checked %}checked{% endif %}>
+                    {{ app.label }}
+                    {% if let Some(other) = app.other_group %}<span class="app-status">in {{ other }} - ticking moves it</span>{% endif %}
+                </label>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <button type="submit">Save {{ group.name }}</button>
+        </form>
+        <form method="post" action="/devices/{{ device.id }}/app-groups/{{ group.id }}/delete" style="margin-top:12px;" onsubmit="return confirm('Delete this group? Its apps go back to following the normal schedule.');">
+            <button type="submit" class="button-small button-danger">Delete group</button>
+        </form>
+    </div>
+    {% endfor %}
+</main>
+</body>
+</html>

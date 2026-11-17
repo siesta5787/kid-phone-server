@@ -49,14 +49,14 @@ struct SchedulesTemplate {
 
 /// HTML `<input type="time">` gives/expects "HH:MM" - these convert to/from the minutes-since-
 /// midnight representation the schema and the device's own schedule logic use.
-fn minutes_to_time_input(minutes: Option<i64>) -> String {
+pub(crate) fn minutes_to_time_input(minutes: Option<i64>) -> String {
     match minutes {
         Some(m) => format!("{:02}:{:02}", m / 60, m % 60),
         None => String::new(),
     }
 }
 
-fn time_input_to_minutes(value: &str) -> Option<i64> {
+pub(crate) fn time_input_to_minutes(value: &str) -> Option<i64> {
     let (h, m) = value.split_once(':')?;
     Some(h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?)
 }
