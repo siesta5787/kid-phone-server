@@ -175,6 +175,22 @@ async fn main() {
             post(handlers::devices::set_lock_override),
         )
         .route(
+            "/devices/{id}/app-groups",
+            get(handlers::app_groups::show_app_groups).post(handlers::app_groups::create_group),
+        )
+        .route(
+            "/devices/{id}/app-groups/{gid}",
+            post(handlers::app_groups::update_group),
+        )
+        .route(
+            "/devices/{id}/app-groups/{gid}/delete",
+            post(handlers::app_groups::delete_group),
+        )
+        .route(
+            "/devices/{id}/app-groups/{gid}/override",
+            post(handlers::app_groups::set_group_override),
+        )
+        .route(
             "/devices/{id}/regenerate-code",
             post(handlers::devices::regenerate_code),
         )

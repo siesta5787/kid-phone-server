@@ -13,7 +13,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::AppState;
 use crate::models::now_epoch_ms;
 use crate::models::{
-    BrowserHistoryUpload, CommandResultRequest, Device, DeviceCommand, DevicePolicy,
+    AppGroupPolicy, BrowserHistoryUpload, CommandResultRequest, Device, DeviceCommand, DevicePolicy,
     DnsBlocklistCategory, DnsEventReport, DnsFilterSettings, EnrollRequest, EnrollResponse,
     GlobalSchedule, InstallProgressReport, InstalledApp, JournalEntryUpload, LockedReportRequest,
     PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp, TrackedAppUpdate,
@@ -170,11 +170,17 @@ pub async fn policy(
     .await
     .unwrap_or_default();
 
-    let (lock_override, lock_override_until_ms) = match policy.active_lock_override(now_epoch_ms())
-    {
+    let now_ms = now_epoch_ms();
+    let (lock_override, lock_override_until_ms) = match policy.active_lock_override(now_ms) {
         Some((mode, until)) => (Some(mode.to_string()), until),
         None => (None, None),
     };
+
+    let app_groups = crate::handlers::app_groups::groups_for_device(&state, device.id)
+        .await
+        .iter()
+        .map(|g| AppGroupPolicy::from_group(g, now_ms))
+        .collect();
 
     Json(PolicyResponse {
         allowlist,
@@ -196,6 +202,7 @@ pub async fn policy(
         packages_to_uninstall,
         lock_override,
         lock_override_until_ms,
+        app_groups,
     })
     .into_response()
 }
@@ -372,8 +379,9 @@ pub async fn status(
 
     sqlx::query(
         "INSERT INTO device_status \
-         (device_id, lock_reason, kiosk_engaged, installed_apps_json, app_version, app_version_code, offline_override_used) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+         (device_id, lock_reason, kiosk_engaged, installed_apps_json, app_version, app_version_code, \
+          offline_override_used, usage_access_granted) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(device.id)
     .bind(&report.lock_reason)
@@ -382,9 +390,28 @@ pub async fn status(
     .bind(&report.app_version)
     .bind(report.app_version_code)
     .bind(report.offline_override_used)
+    .bind(report.usage_access_granted)
     .execute(&state.db)
     .await
     .ok();
+
+    // Latest per-group usage straight onto the group's own row - only the newest report matters
+    // for the device page, so there's no history table. Scoped by device_id so a phone can only
+    // ever update its own groups.
+    for usage in report.app_group_usage.iter().flatten() {
+        sqlx::query(
+            "UPDATE app_groups SET used_minutes = ?, usage_day = ?, blocked_reason = ?, \
+             usage_reported_at = datetime('now') WHERE id = ? AND device_id = ?",
+        )
+        .bind(usage.used_minutes)
+        .bind(&usage.day)
+        .bind(&usage.blocked_reason)
+        .bind(usage.group_id)
+        .bind(device.id)
+        .execute(&state.db)
+        .await
+        .ok();
+    }
 
     sqlx::query("UPDATE devices SET last_seen_at = datetime('now') WHERE id = ?")
         .bind(device.id)

@@ -5,6 +5,7 @@ use axum::{Extension, Form};
 use serde::Deserialize;
 
 use crate::AppState;
+use crate::handlers::app_groups::{self, AppGroupSummary};
 use crate::models::{Device, DevicePolicy, DeviceStatus, InstalledApp, TrackedApp, now_epoch_ms};
 use crate::security::{self, CurrentAdmin};
 
@@ -225,6 +226,10 @@ struct DeviceDetailTemplate {
     lock_override_remaining: String,
     /// Plain-language lock state from the last status report ("Locked (bedtime)" etc).
     lock_state_label: String,
+    /// This device's app groups, one line each - see `handlers::app_groups::summaries`.
+    app_groups: Vec<AppGroupSummary>,
+    /// Warning when app groups can't fully work on this phone, else empty.
+    app_groups_note: String,
 }
 
 /// Turns the device's reported `LockReason` enum name into something a parent can read.
@@ -239,7 +244,7 @@ fn lock_reason_label(reason: &str) -> String {
 }
 
 /// "for another 1 h 5 min" style countdown for the device page, rounded up to the minute.
-fn remaining_label(until_ms: i64, now_ms: i64) -> String {
+pub(crate) fn remaining_label(until_ms: i64, now_ms: i64) -> String {
     let minutes = ((until_ms - now_ms).max(0) + 59_999) / 60_000;
     let (h, m) = (minutes / 60, minutes % 60);
     match (h, m) {
@@ -432,6 +437,11 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         .map(|s| lock_reason_label(&s.lock_reason))
         .unwrap_or_default();
 
+    let groups = app_groups::groups_for_device(&state, id).await;
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let app_groups_note = app_groups::usage_note(&groups, latest_status.as_ref());
+    let app_groups = app_groups::summaries(&groups, now_ms, &today);
+
     Html(
         DeviceDetailTemplate {
             title: device.name.clone(),
@@ -448,6 +458,8 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             lock_override,
             lock_override_remaining,
             lock_state_label,
+            app_groups,
+            app_groups_note,
         }
         .render()
         .unwrap(),

@@ -62,6 +62,43 @@
             <button type="submit" name="action" value="unlock" class="button-small button-secondary">Unlock now</button>
         </form>
     </div>
+
+    <div class="card" id="app-groups">
+        <h2>App groups</h2>
+        {% if app_groups.is_empty() %}
+        <p class="subtitle">Put apps into groups - like Streaming or Games - to give each group a shared daily time limit and allowed hours, or pause a whole group at once. The apps stay installed; they just can't be opened while their group is blocked.</p>
+        <a href="/devices/{{ device.id }}/app-groups" class="button-small">Set up app groups</a>
+        {% else %}
+        {% if !app_groups_note.is_empty() %}
+        <div class="error">{{ app_groups_note }}</div>
+        {% endif %}
+        {% for group in app_groups %}
+        <div class="app-group-row">
+            <div class="app-group-title">
+                <strong>{{ group.name }}</strong>
+                <span class="app-status" data-blocked="{{ group.blocked }}">{{ group.status_label }}</span>
+            </div>
+            <p class="subtitle">{{ group.rules_label }}{% if !group.usage_label.is_empty() %} · {{ group.usage_label }}{% endif %}</p>
+            <form method="post" action="/devices/{{ device.id }}/app-groups/{{ group.id }}/override" class="inline-controls">
+                <select name="duration_minutes" aria-label="For how long">
+                    <option value="30">for 30 minutes</option>
+                    <option value="60" selected>for 1 hour</option>
+                    <option value="120">for 2 hours</option>
+                    <option value="240">for 4 hours</option>
+                    <option value="">until I change it</option>
+                </select>
+                <button type="submit" name="action" value="pause" class="button-small">Pause</button>
+                <button type="submit" name="action" value="allow" class="button-small button-secondary">Allow</button>
+                {% if group.has_override %}
+                <button type="submit" name="action" value="rules" class="button-small button-secondary">Back to rules</button>
+                {% endif %}
+            </form>
+        </div>
+        {% endfor %}
+        <p class="subtitle">"Allow" lets a group's apps be used even outside its hours or after its time is up - handy for extra time.</p>
+        <a href="/devices/{{ device.id }}/app-groups" class="button-small button-secondary">Edit groups</a>
+        {% endif %}
+    </div>
     {% endif %}
 
     <div class="card">

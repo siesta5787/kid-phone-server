@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod app_groups;
 pub mod auth;
 pub mod backups;
 pub mod browser_history;
