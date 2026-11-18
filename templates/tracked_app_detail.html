@@ -78,6 +78,10 @@
         {% endif %}
         {% if let Some(tag) = app.latest_release_tag %}
         <p>Release on phones: <strong>{{ tag }}</strong></p>
+        {% let split_count = app.latest_splits().len() %}
+        {% if split_count > 0 %}
+        <p class="subtitle">Comes as {{ split_count + 1 }} pieces (a main APK plus {{ split_count }} split APKs), installed together - phones need launcher v0.55.0 or newer for this app.</p>
+        {% endif %}
         {% if let Some(apk) = app.latest_apk() %}
         {% include "partials/apk_facts.html" %}
         {% endif %}

@@ -17,9 +17,12 @@ use crate::models::{
     DevicePolicy, DnsBlocklistCategory, DnsEventReport, DnsFilterSettings, EnrollRequest,
     EnrollResponse, GlobalSchedule, InstallProgressReport, InstalledApp, JournalEntryUpload,
     LockedReportRequest, PendingCommand, PlaySigninRequest, PlaySigninResponse, PolicyResponse,
-    StatusReportRequest, TrackedApp, TrackedAppUpdate,
+    StatusReportRequest, TrackedApp, TrackedAppSplit, TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
+
+/// First launcher build that installs split APKs (v0.55.0) - see `tracked_app_updates`.
+const MIN_SPLIT_APK_LAUNCHER_VERSION_CODE: i64 = 135;
 
 pub async fn enroll(
     State(state): State<AppState>,
@@ -752,9 +755,29 @@ pub async fn tracked_app_updates(
     .await
     .unwrap_or_default();
 
+    // Split-APK releases (Google Play) are only offered to launchers that can install them - an
+    // older one would install just the base APK, which Android refuses, and then never retry that
+    // release. It picks them up after its own self-update.
+    let launcher_version_code: i64 = sqlx::query_scalar(
+        "SELECT app_version_code FROM device_status WHERE device_id = ? \
+         ORDER BY reported_at DESC LIMIT 1",
+    )
+    .bind(device.id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+    .unwrap_or(0);
+    let can_install_splits = launcher_version_code >= MIN_SPLIT_APK_LAUNCHER_VERSION_CODE;
+
     let updates: Vec<TrackedAppUpdate> = apps
         .into_iter()
         .filter_map(|app| {
+            let split_count = app.latest_splits().len();
+            if split_count > 0 && !can_install_splits {
+                return None;
+            }
             let tag = app.latest_release_tag?;
             let release_tag = match app.latest_release_asset_id {
                 Some(asset_id) => format!("{tag}@{asset_id}"),
@@ -767,6 +790,12 @@ pub async fn tracked_app_updates(
                 release_tag,
                 download_url: format!("/api/devices/apps/{}/download", app.id),
                 is_launcher: app.is_launcher,
+                splits: (0..split_count)
+                    .map(|index| TrackedAppSplit {
+                        name: format!("split{index}"),
+                        download_url: format!("/api/devices/apps/{}/split/{index}", app.id),
+                    })
+                    .collect(),
             })
         })
         .collect();
@@ -789,18 +818,51 @@ pub async fn tracked_app_download(
     let Some(file_path) = app.and_then(|a| a.latest_release_file_path) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    send_apk(&file_path).await
+}
 
-    match tokio::fs::read(&file_path).await {
-        Ok(bytes) => (
-            [(
-                header::CONTENT_TYPE,
-                "application/vnd.android.package-archive",
-            )],
-            bytes,
-        )
-            .into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
+/// One split APK of a tracked app's live release, by its position in the list
+/// `tracked_app_updates` sent - see migrations/0026_split_apks.sql.
+pub async fn tracked_app_split_download(
+    State(state): State<AppState>,
+    Path((id, index)): Path<(i64, usize)>,
+    Extension(AuthedDevice(_device)): Extension<AuthedDevice>,
+) -> impl IntoResponse {
+    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+
+    let Some(split) = app.and_then(|a| a.latest_splits().into_iter().nth(index)) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    send_apk(&split.path).await
+}
+
+/// Streams an APK from disk with its length set, so the phone can show download progress and the
+/// Pi never holds a whole (possibly several-hundred-MB) file in memory.
+async fn send_apk(path: &str) -> axum::response::Response {
+    let Ok(file) = tokio::fs::File::open(path).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let length = file.metadata().await.map(|m| m.len()).ok();
+    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file));
+    let mut response = (
+        [(
+            header::CONTENT_TYPE,
+            "application/vnd.android.package-archive",
+        )],
+        body,
+    )
+        .into_response();
+    if let Some(length) = length {
+        response
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, length.into());
     }
+    response
 }
 
 const JOURNAL_MEDIA_DIR: &str = "data/journal_media";

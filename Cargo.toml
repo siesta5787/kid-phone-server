@@ -41,6 +41,9 @@ tower-http = { version = "0.7.0", features = ["fs", "set-header"] }
 tower-sessions = "0.14"
 tower-sessions-sqlx-store = { version = "0.15.0", features = ["sqlite"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+# Streams APK downloads to phones straight from disk (handlers::device_api::send_apk) - Google Play
+# APKs can be hundreds of MB, too big to read into memory on a 512 MB Pi Zero.
+tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

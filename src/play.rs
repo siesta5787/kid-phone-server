@@ -282,9 +282,9 @@ pub async fn lookup(state: &AppState, package_name: &str) -> Result<PlayApp, Str
 /// Where to download one Play release from.
 pub struct PlayFiles {
     pub main_url: String,
-    /// Names of the extra "split" APKs Play delivers alongside the main one - not installable by
-    /// launchers yet, so a release with any is refused for now.
-    pub split_names: Vec<String>,
+    /// The extra "split" APKs Play delivers alongside the main one (`(name, url)`), installed
+    /// together with it in one session - e.g. `config.arm64_v8a`, `config.xxhdpi`, `config.en`.
+    pub splits: Vec<(String, String)>,
     /// Extra data files (OBB) some games need - not supported.
     pub has_additional_files: bool,
 }
@@ -311,7 +311,10 @@ pub async fn files(
     };
     Ok(PlayFiles {
         main_url: main_url.ok_or("Google Play didn't provide a download link")?,
-        split_names: splits.into_iter().filter_map(|(name, _)| name).collect(),
+        splits: splits
+            .into_iter()
+            .filter_map(|(name, url)| Some((name?, url?)))
+            .collect(),
         has_additional_files: !additional.is_empty(),
     })
 }

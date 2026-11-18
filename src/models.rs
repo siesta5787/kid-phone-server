@@ -201,9 +201,34 @@ pub struct TrackedApp {
     /// Why the last update check failed, None once one succeeds - see
     /// migrations/0025_google_play.sql.
     pub last_check_error: Option<String>,
+    /// The live/pending release's split APKs, JSON [ReleaseSplit] list - use
+    /// [TrackedApp::latest_splits]/[TrackedApp::pending_splits]. See migrations/0026_split_apks.sql.
+    pub latest_release_splits_json: Option<String>,
+    pub pending_release_splits_json: Option<String>,
+}
+
+/// One split APK of a release, stored next to its base APK.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ReleaseSplit {
+    /// Play's split name, e.g. `config.arm64_v8a`.
+    pub name: String,
+    pub path: String,
+}
+
+fn parse_splits(json: Option<&str>) -> Vec<ReleaseSplit> {
+    json.and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default()
 }
 
 impl TrackedApp {
+    pub fn latest_splits(&self) -> Vec<ReleaseSplit> {
+        parse_splits(self.latest_release_splits_json.as_deref())
+    }
+
+    pub fn pending_splits(&self) -> Vec<ReleaseSplit> {
+        parse_splits(self.pending_release_splits_json.as_deref())
+    }
+
     pub fn latest_apk(&self) -> Option<ApkInfo> {
         serde_json::from_str(self.latest_apk_json.as_deref()?).ok()
     }
@@ -570,6 +595,15 @@ pub struct TrackedAppUpdate {
     pub release_tag: String,
     pub download_url: String,
     pub is_launcher: bool,
+    /// The release's split APKs, installed in the same session as `download_url`'s base APK -
+    /// empty for single-APK releases. Only ever non-empty for launchers that can install them.
+    pub splits: Vec<TrackedAppSplit>,
+}
+
+#[derive(Serialize)]
+pub struct TrackedAppSplit {
+    pub name: String,
+    pub download_url: String,
 }
 
 // ---------------------------------------------------------------------

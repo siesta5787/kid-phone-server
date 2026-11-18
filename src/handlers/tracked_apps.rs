@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use crate::AppState;
 use crate::apk::ApkInfo;
-use crate::models::TrackedApp;
+use crate::models::{ReleaseSplit, TrackedApp};
 use crate::security::{CurrentAdmin, generate_device_token};
 
 const TRACKED_APPS_DIR: &str = "data/tracked_apps";
@@ -97,8 +97,34 @@ fn release_key(tag: &str, asset_id: Option<i64>) -> String {
 struct StagedRelease {
     tag: String,
     asset_id: Option<i64>,
+    /// The base APK - the only file for GitHub/manual releases.
     file_path: String,
+    /// Split APKs installed together with the base one (Google Play) - see
+    /// migrations/0026_split_apks.sql. `apk` describes the base APK only.
+    splits: Vec<ReleaseSplit>,
     apk: Result<ApkInfo, String>,
+}
+
+fn splits_json(splits: &[ReleaseSplit]) -> Option<String> {
+    (!splits.is_empty())
+        .then(|| serde_json::to_string(splits).ok())
+        .flatten()
+}
+
+/// Deletes a release's files: the base APK, its splits, and - for a Google Play release kept in
+/// its own `play-*` folder - that folder once it's empty.
+async fn remove_release_files(base: &str, splits: &[ReleaseSplit]) {
+    tokio::fs::remove_file(base).await.ok();
+    for split in splits {
+        tokio::fs::remove_file(&split.path).await.ok();
+    }
+    let parent = std::path::Path::new(base).parent();
+    if let Some(dir) = parent.filter(|d| {
+        d.file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("play-"))
+    }) {
+        tokio::fs::remove_dir(dir).await.ok();
+    }
 }
 
 async fn analyze_file(file_path: &str) -> Result<ApkInfo, String> {
@@ -187,7 +213,7 @@ fn review_reasons(
 
 const CLEAR_PENDING: &str = "pending_release_tag = NULL, pending_release_asset_id = NULL, \
      pending_release_file_path = NULL, pending_apk_json = NULL, pending_review_reasons = NULL, \
-     pending_publish_after = NULL, pending_found_at = NULL";
+     pending_publish_after = NULL, pending_found_at = NULL, pending_release_splits_json = NULL";
 
 /// Decides what happens to a release that was just downloaded or uploaded: published straight
 /// away, or held as this app's one pending release (replacing any older pending one) - for the
@@ -214,7 +240,7 @@ async fn stage_release(
 
     if let Some(old) = &app.pending_release_file_path {
         if old != &release.file_path {
-            tokio::fs::remove_file(old).await.ok();
+            remove_release_files(old, &app.pending_splits()).await;
         }
     }
 
@@ -227,7 +253,7 @@ async fn stage_release(
         "UPDATE tracked_apps SET pending_release_tag = ?, pending_release_asset_id = ?, \
          pending_release_file_path = ?, pending_apk_json = ?, pending_review_reasons = ?, \
          pending_publish_after = CASE WHEN ? IS NULL THEN NULL ELSE datetime('now', ?) END, \
-         pending_found_at = datetime('now') WHERE id = ?",
+         pending_found_at = datetime('now'), pending_release_splits_json = ? WHERE id = ?",
     )
     .bind(&release.tag)
     .bind(release.asset_id)
@@ -242,6 +268,7 @@ async fn stage_release(
     .bind(serde_json::to_string(&reasons).unwrap_or_else(|_| "[]".to_string()))
     .bind(&publish_after_modifier)
     .bind(&publish_after_modifier)
+    .bind(splits_json(&release.splits))
     .bind(app.id)
     .execute(&state.db)
     .await
@@ -257,13 +284,14 @@ async fn publish(state: &AppState, app: &TrackedApp, release: StagedRelease) -> 
     let apk = release.apk.ok();
     sqlx::query(&format!(
         "UPDATE tracked_apps SET latest_release_tag = ?, latest_release_asset_id = ?, \
-         latest_release_file_path = ?, latest_apk_json = ?, \
+         latest_release_file_path = ?, latest_apk_json = ?, latest_release_splits_json = ?, \
          signing_cert_sha256 = COALESCE(?, signing_cert_sha256), {CLEAR_PENDING} WHERE id = ?"
     ))
     .bind(&release.tag)
     .bind(release.asset_id)
     .bind(&release.file_path)
     .bind(apk.as_ref().and_then(|a| serde_json::to_string(a).ok()))
+    .bind(splits_json(&release.splits))
     .bind(apk.as_ref().and_then(|a| a.cert_sha256.clone()))
     .bind(app.id)
     .execute(&state.db)
@@ -272,7 +300,7 @@ async fn publish(state: &AppState, app: &TrackedApp, release: StagedRelease) -> 
 
     if let Some(old) = &app.latest_release_file_path {
         if old != &release.file_path {
-            tokio::fs::remove_file(old).await.ok();
+            remove_release_files(old, &app.latest_splits()).await;
         }
     }
     if let Some(apk) = &apk {
@@ -332,6 +360,7 @@ async fn publish_pending(state: &AppState, app: &TrackedApp) -> Result<(), Strin
         tag: app.pending_release_tag.clone().unwrap_or_default(),
         asset_id: app.pending_release_asset_id,
         file_path,
+        splits: app.pending_splits(),
         apk: app
             .pending_apk()
             .ok_or_else(|| "APK couldn't be read".to_string()),
@@ -468,6 +497,7 @@ async fn sync_github_app(state: &AppState, app: &TrackedApp) -> Result<(), Strin
         tag: release.tag_name.clone(),
         asset_id: Some(asset.id),
         file_path,
+        splits: Vec::new(),
         apk,
     };
     stage_release(state, app, staged, false).await
@@ -528,13 +558,6 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
     }
 
     let files = crate::play::files(state, &app.package_name, listing.version_code).await?;
-    if !files.split_names.is_empty() {
-        return Err(format!(
-            "Google Play only delivers this app as {} pieces (a main APK plus split APKs), which \
-             phones can't install yet - coming in a later launcher update.",
-            files.split_names.len() + 1
-        ));
-    }
     if files.has_additional_files {
         return Err(
             "This app needs extra data files (OBB) from Google Play, which aren't supported."
@@ -542,18 +565,42 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
         );
     }
 
-    let app_dir = format!("{TRACKED_APPS_DIR}/{}", app.id);
-    tokio::fs::create_dir_all(&app_dir)
+    // Each Play release gets its own folder (base + splits), so removing it later is one folder.
+    let release_dir = format!(
+        "{TRACKED_APPS_DIR}/{}/play-{}",
+        app.id, listing.version_code
+    );
+    tokio::fs::remove_dir_all(&release_dir).await.ok();
+    tokio::fs::create_dir_all(&release_dir)
         .await
         .map_err(|e| e.to_string())?;
-    let file_path = format!("{app_dir}/play-{}.apk", listing.version_code);
-    download_to_file(&files.main_url, &file_path).await?;
+    let file_path = format!("{release_dir}/base.apk");
+    let mut splits = Vec::new();
+    let downloaded = async {
+        download_to_file(&files.main_url, &file_path).await?;
+        for (index, (name, url)) in files.splits.iter().enumerate() {
+            // Never a Play-supplied name in the path - it only goes in the JSON.
+            let path = format!("{release_dir}/split-{index}.apk");
+            download_to_file(url, &path).await?;
+            splits.push(ReleaseSplit {
+                name: name.clone(),
+                path,
+            });
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+    if let Err(e) = downloaded {
+        tokio::fs::remove_dir_all(&release_dir).await.ok();
+        return Err(e);
+    }
 
     let apk = analyze_file(&file_path).await;
     let staged = StagedRelease {
         tag,
         asset_id: None,
         file_path,
+        splits,
         apk,
     };
     // The first release was picked deliberately from a preview on the "Add from Google Play" page,
@@ -892,6 +939,7 @@ pub async fn upload_tracked_app_release(
         tag: release_label,
         asset_id: None,
         file_path,
+        splits: Vec::new(),
         apk,
     };
     let error = stage_release(&state, &app, staged, true).await.err();
@@ -933,7 +981,7 @@ pub async fn reject_pending_release(
         return Redirect::to("/apps");
     };
     if let Some(path) = &app.pending_release_file_path {
-        tokio::fs::remove_file(path).await.ok();
+        remove_release_files(path, &app.pending_splits()).await;
     }
     let rejected = app
         .pending_release_tag
@@ -1127,14 +1175,11 @@ pub async fn delete_tracked_app(
         return Redirect::to(&format!("/apps/tracked/{id}"));
     }
 
-    for path in [
-        &app.latest_release_file_path,
-        &app.pending_release_file_path,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        tokio::fs::remove_file(path).await.ok();
+    if let Some(path) = &app.latest_release_file_path {
+        remove_release_files(path, &app.latest_splits()).await;
+    }
+    if let Some(path) = &app.pending_release_file_path {
+        remove_release_files(path, &app.pending_splits()).await;
     }
 
     sqlx::query("DELETE FROM tracked_apps WHERE id = ?")

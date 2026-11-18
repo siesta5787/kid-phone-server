@@ -425,6 +425,10 @@ async fn main() {
             get(handlers::device_api::tracked_app_download),
         )
         .route(
+            "/api/devices/apps/{id}/split/{index}",
+            get(handlers::device_api::tracked_app_split_download),
+        )
+        .route(
             "/api/devices/apps/progress",
             post(handlers::device_api::install_progress),
         )
