@@ -6,6 +6,7 @@ pub mod browser_history;
 pub mod device_api;
 pub mod devices;
 pub mod dns_filter;
+pub mod google_play;
 pub mod journal;
 pub mod locate;
 pub mod provisioning;

@@ -16,8 +16,8 @@ use crate::models::{
     AppGroupPolicy, BrowserHistoryUpload, CommandResultRequest, Device, DeviceCommand,
     DevicePolicy, DnsBlocklistCategory, DnsEventReport, DnsFilterSettings, EnrollRequest,
     EnrollResponse, GlobalSchedule, InstallProgressReport, InstalledApp, JournalEntryUpload,
-    LockedReportRequest, PendingCommand, PolicyResponse, StatusReportRequest, TrackedApp,
-    TrackedAppUpdate,
+    LockedReportRequest, PendingCommand, PlaySigninRequest, PlaySigninResponse, PolicyResponse,
+    StatusReportRequest, TrackedApp, TrackedAppUpdate,
 };
 use crate::security::{self, AuthedDevice};
 
@@ -576,6 +576,48 @@ pub async fn status(
 
 /// See [LockedReportRequest] - only proves the phone is alive (`last_seen_at`) and adds a point to
 /// the Find My Device trail; never touches `device_status`.
+/// The launcher's "Sign in to Google Play" screen hands over the one-time sign-in code Google's
+/// page set once the parent signed in there. Only accepted while the parent has "Sign in using a
+/// phone" open on Settings → Google Play (a few minutes), and the window closes on success - so a
+/// kid's device can never quietly swap in some other Google account. The server keeps only the
+/// long-lived token it gets for the code (see `play::sign_in`), never a password.
+pub async fn play_signin(
+    State(state): State<AppState>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
+    Json(request): Json<PlaySigninRequest>,
+) -> impl IntoResponse {
+    let settings = crate::play::settings(&state).await;
+    let Some(email) = settings
+        .signin_email
+        .clone()
+        .filter(|_| settings.signin_window_open(now_epoch_ms()))
+    else {
+        return Json(PlaySigninResponse {
+            ok: false,
+            message: "The server isn't expecting a sign-in. On the parent website, open \
+                      Settings → Google Play and press \"Sign in using a phone\" first."
+                .to_string(),
+        });
+    };
+    match crate::play::sign_in(&state, &email, &request.oauth_token).await {
+        Ok(()) => {
+            security::record_security_event(
+                &state.db,
+                "google_play_signed_in",
+                None,
+                None,
+                Some(&format!("{email} (from device {})", device.id)),
+            )
+            .await;
+            Json(PlaySigninResponse {
+                ok: true,
+                message: format!("Signed in to Google Play as {email}."),
+            })
+        }
+        Err(message) => Json(PlaySigninResponse { ok: false, message }),
+    }
+}
+
 pub async fn locked_report(
     State(state): State<AppState>,
     Extension(AuthedDevice(device)): Extension<AuthedDevice>,

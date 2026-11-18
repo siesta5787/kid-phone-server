@@ -1,6 +1,6 @@
 [package]
 name = "kid_phone_server"
-version = "0.23.0"
+version = "0.24.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
@@ -28,6 +28,9 @@ reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no
 # documented as having no semver stability on its accepted argument type; don't retry it without
 # a way to actually run the built binary against a live HTTPS endpoint first, not just compile it.)
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# Google Play downloads (src/play.rs) - a vendored, rustls-only copy of EFF's gpapi crate, see
+# vendor/gpapi/Cargo.toml for what changed from upstream and why.
+gpapi = { path = "vendor/gpapi" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.10"

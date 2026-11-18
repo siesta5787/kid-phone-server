@@ -397,10 +397,21 @@ async fn backfill_release_info(state: &AppState) {
 /// `upload_tracked_app_release`. Used by both the scheduled loop and the admin's manual "Check
 /// now" button, so they can never drift apart.
 async fn sync_one_app(state: &AppState, app: &TrackedApp) -> Result<(), String> {
-    if app.source_type != "github" {
-        return Ok(());
-    }
+    let result = match app.source_type.as_str() {
+        "github" => sync_github_app(state, app).await,
+        "play" => sync_play_app(state, app).await,
+        _ => Ok(()),
+    };
+    sqlx::query("UPDATE tracked_apps SET last_check_error = ? WHERE id = ?")
+        .bind(result.as_ref().err())
+        .bind(app.id)
+        .execute(&state.db)
+        .await
+        .ok();
+    result
+}
 
+async fn sync_github_app(state: &AppState, app: &TrackedApp) -> Result<(), String> {
     let release = fetch_latest_release(&app.github_repo, app.include_prereleases).await?;
 
     sqlx::query("UPDATE tracked_apps SET last_checked_at = datetime('now') WHERE id = ?")
@@ -460,6 +471,129 @@ async fn sync_one_app(state: &AppState, app: &TrackedApp) -> Result<(), String> 
         apk,
     };
     stage_release(state, app, staged, false).await
+}
+
+/// Runs one app's update check right away, outside the hourly loop - used when a Google Play app
+/// is first added, so its first release downloads without waiting up to an hour. Errors are
+/// stored on the app (`last_check_error`) by `sync_one_app` itself.
+pub async fn sync_by_id(state: &AppState, id: i64) {
+    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    if let Some(app) = app {
+        if let Err(e) = sync_one_app(state, &app).await {
+            tracing::warn!("tracked app '{}' first sync failed: {e}", app.name);
+        }
+    }
+}
+
+/// A Google Play app's update check (see src/play.rs): asks Play for the current version, and
+/// when it's one phones don't have yet (and newer than the live one - Play can briefly serve an
+/// older build, and Android refuses downgrades anyway), downloads it and hands it to
+/// `stage_release` like any other source. Play's version name + code is the release tag.
+///
+/// Apps Play only delivers as several "split" APKs, or with extra OBB data files, are refused
+/// with a readable reason for now - launchers can only install a single APK so far.
+async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String> {
+    let listing = crate::play::lookup(state, &app.package_name).await?;
+
+    sqlx::query("UPDATE tracked_apps SET last_checked_at = datetime('now') WHERE id = ?")
+        .bind(app.id)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    let tag = format!("{} ({})", listing.version_name, listing.version_code);
+    let key = release_key(&tag, None);
+    let seen = [
+        app.latest_release_tag
+            .as_deref()
+            .map(|t| release_key(t, None)),
+        app.pending_release_tag
+            .as_deref()
+            .map(|t| release_key(t, None)),
+        app.rejected_release_key.clone(),
+    ];
+    if seen.iter().flatten().any(|k| k == &key) {
+        return Ok(());
+    }
+    if app
+        .latest_apk()
+        .is_some_and(|live| listing.version_code <= live.version_code)
+    {
+        return Ok(());
+    }
+
+    let files = crate::play::files(state, &app.package_name, listing.version_code).await?;
+    if !files.split_names.is_empty() {
+        return Err(format!(
+            "Google Play only delivers this app as {} pieces (a main APK plus split APKs), which \
+             phones can't install yet - coming in a later launcher update.",
+            files.split_names.len() + 1
+        ));
+    }
+    if files.has_additional_files {
+        return Err(
+            "This app needs extra data files (OBB) from Google Play, which aren't supported."
+                .to_string(),
+        );
+    }
+
+    let app_dir = format!("{TRACKED_APPS_DIR}/{}", app.id);
+    tokio::fs::create_dir_all(&app_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    let file_path = format!("{app_dir}/play-{}.apk", listing.version_code);
+    download_to_file(&files.main_url, &file_path).await?;
+
+    let apk = analyze_file(&file_path).await;
+    let staged = StagedRelease {
+        tag,
+        asset_id: None,
+        file_path,
+        apk,
+    };
+    // The first release was picked deliberately from a preview on the "Add from Google Play" page,
+    // so it doesn't also wait for review or the hold period - same as an admin upload. Later
+    // updates get the normal checks.
+    let first_release = app.latest_release_file_path.is_none();
+    stage_release(state, app, staged, first_release).await
+}
+
+/// Streams a download to `path` via a `.part` file, so a cut-off download never looks like a
+/// finished APK. Play APKs can be hundreds of MB - never held in memory whole.
+async fn download_to_file(url: &str, path: &str) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30 * 60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut response = client
+        .get(url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("download failed: {e}"))?;
+    let part = format!("{path}.part");
+    let mut file = tokio::fs::File::create(&part)
+        .await
+        .map_err(|e| e.to_string())?;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("download failed: {e}"))?
+    {
+        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+    }
+    file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+    tokio::fs::rename(&part, path)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Background task: checks every enabled tracked app on a fixed interval, after publishing any

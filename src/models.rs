@@ -198,6 +198,9 @@ pub struct TrackedApp {
     pub pending_found_at: Option<String>,
     pub rejected_release_key: Option<String>,
     pub hold_days: i64,
+    /// Why the last update check failed, None once one succeeds - see
+    /// migrations/0025_google_play.sql.
+    pub last_check_error: Option<String>,
 }
 
 impl TrackedApp {
@@ -457,6 +460,20 @@ pub struct StatusReportRequest {
     pub usage_access_granted: Option<bool>,
     #[serde(default)]
     pub app_group_usage: Option<Vec<AppGroupUsageReport>>,
+}
+
+/// From the launcher's "Sign in to Google Play" screen: the one-time `oauth_token` cookie Google's
+/// sign-in page set - see `handlers::device_api::play_signin`.
+#[derive(Deserialize)]
+pub struct PlaySigninRequest {
+    pub oauth_token: String,
+}
+
+#[derive(Serialize)]
+pub struct PlaySigninResponse {
+    pub ok: bool,
+    /// Shown to the parent on the phone as-is.
+    pub message: String,
 }
 
 /// The phone's view of one app group right now - see `handlers::device_api::status`.
