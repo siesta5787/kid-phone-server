@@ -3,6 +3,7 @@ mod box_api;
 mod dns_engine;
 mod handlers;
 mod models;
+mod play;
 mod security;
 
 use axum::Router;
@@ -310,6 +311,34 @@ async fn main() {
         )
         .route("/settings", get(handlers::settings::settings_hub))
         .route(
+            "/settings/google-play",
+            get(handlers::google_play::show_settings),
+        )
+        .route(
+            "/settings/google-play/phone-signin",
+            post(handlers::google_play::start_phone_signin),
+        )
+        .route(
+            "/settings/google-play/cancel-signin",
+            post(handlers::google_play::cancel_phone_signin),
+        )
+        .route(
+            "/settings/google-play/manual-signin",
+            post(handlers::google_play::manual_signin),
+        )
+        .route(
+            "/settings/google-play/test",
+            post(handlers::google_play::test_connection),
+        )
+        .route(
+            "/settings/google-play/sign-out",
+            post(handlers::google_play::sign_out),
+        )
+        .route(
+            "/apps/play/new",
+            get(handlers::google_play::add_form).post(handlers::google_play::add_app),
+        )
+        .route(
             "/settings/provisioning",
             get(handlers::settings::provisioning_settings_form)
                 .post(handlers::settings::update_provisioning_settings),
@@ -372,6 +401,10 @@ async fn main() {
         .route("/api/devices/policy", get(handlers::device_api::policy))
         .route("/api/devices/status", post(handlers::device_api::status))
         .route(
+            "/api/devices/play-signin",
+            post(handlers::device_api::play_signin),
+        )
+        .route(
             "/api/devices/locked-report",
             post(handlers::device_api::locked_report),
         )
@@ -390,6 +423,10 @@ async fn main() {
         .route(
             "/api/devices/apps/{id}/download",
             get(handlers::device_api::tracked_app_download),
+        )
+        .route(
+            "/api/devices/apps/{id}/split/{index}",
+            get(handlers::device_api::tracked_app_split_download),
         )
         .route(
             "/api/devices/apps/progress",

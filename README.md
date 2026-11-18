@@ -45,3 +45,5 @@ See [CLAUDE.md](CLAUDE.md) for architecture notes and the device-facing API cont
 ## License
 
 [GNU General Public License v3.0](LICENSE) or later.
+
+`vendor/gpapi/` is a lightly modified copy of EFF's [gpapi](https://github.com/EFForg/rs-google-play) Google Play client, MIT-licensed - see `vendor/gpapi/LICENSE` and `vendor/gpapi/Cargo.toml` for what changed.

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container container-narrow">
+    <h1>Add from Google Play</h1>
+    {% if !signed_in %}
+    <div class="card">
+        <p>The server isn't signed in to Google Play yet.</p>
+        <a href="/settings/google-play" class="button-small">Set up Google Play</a>
+    </div>
+    {% else %}
+    <p class="subtitle">Open the app on <a href="https://play.google.com/store/apps" target="_blank" rel="noopener">play.google.com</a>, copy the address from your browser, and paste it here - or type the app's package name.</p>
+    <form method="get" action="/apps/play/new" class="inline-controls">
+        <input type="text" name="q" value="{{ query }}" placeholder="https://play.google.com/store/apps/details?id=..." aria-label="Google Play link or package name" style="flex:1; min-width:14em;" required autofocus>
+        <button type="submit" class="button-small">Look up</button>
+    </form>
+
+    {% if !error.is_empty() %}
+    <div class="error" style="margin-top:16px;">{{ error }}</div>
+    {% endif %}
+
+    {% if let Some(app) = found %}
+    <div class="card" style="margin-top:16px;">
+        <div class="app-group-title">
+            {% if let Some(icon) = app.icon_url %}
+            <img src="{{ icon }}" alt="" width="56" height="56" style="border-radius:12px;" referrerpolicy="no-referrer">
+            {% endif %}
+            <div>
+                <h2 style="margin:0;">{{ app.title }}</h2>
+                <p class="subtitle" style="margin:0;">{{ app.developer }}</p>
+            </div>
+        </div>
+        <p class="subtitle">Version {{ app.version_name }}{% if !size_label.is_empty() %} · about {{ size_label }}{% endif %} · <code>{{ app.package_name }}</code></p>
+        {% if let Some(id) = existing_id %}
+        <p>Already in your catalog.</p>
+        <a href="/apps/tracked/{{ id }}" class="button-small">Open it</a>
+        {% else %}
+        <form method="post" action="/apps/play/new">
+            <input type="hidden" name="package_name" value="{{ app.package_name }}">
+            <label for="name">Name in your catalog</label>
+            <input type="text" id="name" name="name" value="{{ app.title }}" maxlength="80">
+            <button type="submit">Add to catalog</button>
+        </form>
+        <p class="hint">The server downloads it right away and checks for updates every hour. To put it on a phone, tick it in that device's Apps list.</p>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% endif %}
+</main>
+</body>
+</html>

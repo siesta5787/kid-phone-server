@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+{% include "partials/head.html" %}
+{% if window_open %}
+<meta http-equiv="refresh" content="5">
+{% endif %}
+</head>
+<body>
+{% include "partials/app_header.html" %}
+<main class="container container-narrow">
+    <h1>Google Play</h1>
+    <p class="subtitle">Lets you add apps from Google Play to the <a href="/apps">Apps</a> catalog and keeps them updated, the same way GitHub apps are. The server signs in to Google Play with a Google account to download them.</p>
+
+    {% if !message.is_empty() %}
+    <div class="card"><p><strong>{{ message }}</strong></p></div>
+    {% endif %}
+    {% if !error.is_empty() %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <div class="card">
+        <h2>Status</h2>
+        {% if signed_in %}
+        <p>Signed in as <strong>{{ email }}</strong>{% if !signed_in_at.is_empty() %} <span class="subtitle">(since {{ signed_in_at }})</span>{% endif %}</p>
+        {% if !last_error.is_empty() %}
+        <div class="error">Last attempt failed: {{ last_error }}</div>
+        {% else if !last_ok_at.is_empty() %}
+        <p class="subtitle">Last worked {{ last_ok_at }}</p>
+        {% endif %}
+        <div class="inline-controls">
+            <form method="post" action="/settings/google-play/test">
+                <button type="submit" class="button-small">Test</button>
+            </form>
+            <form method="post" action="/settings/google-play/sign-out" onsubmit="return confirm('Sign the server out of Google Play? Google Play apps stop updating until you sign in again.');">
+                <button type="submit" class="button-small button-secondary">Sign out</button>
+            </form>
+        </div>
+        {% else %}
+        <p>Not signed in.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>{% if signed_in %}Switch account{% else %}Sign in{% endif %}</h2>
+        <p class="subtitle"><strong>Use a spare Google account, not your main one.</strong> Downloading from Google Play outside the Play Store app is against Google's terms, and Google can block an account it catches doing it. Only free apps (and apps this account has bought) can be added.</p>
+
+        {% if window_open %}
+        <p><strong>Waiting for a phone…</strong> ({{ window_minutes_left }} min left)</p>
+        <ol>
+            <li>On one of your enrolled phones or tablets, open the launcher's Settings (your unlock code).</li>
+            <li>Tap <strong>Sign in to Google Play</strong> and sign in as <strong>{{ window_email }}</strong>.</li>
+            <li>This page updates by itself once it's done.</li>
+        </ol>
+        <form method="post" action="/settings/google-play/cancel-signin">
+            <button type="submit" class="button-small button-secondary">Cancel</button>
+        </form>
+        {% else %}
+        <form method="post" action="/settings/google-play/phone-signin">
+            <label for="email">Spare Google account's email</label>
+            <input type="text" id="email" name="email" inputmode="email" autocomplete="off" placeholder="e.g. ourfamily.apps@gmail.com" required>
+            <button type="submit">Sign in using a phone</button>
+        </form>
+        <p class="hint">Opens a {{ window_length }}-minute window in which one of your enrolled devices can finish the sign-in. Your password only goes to Google - the server gets a sign-in code from the phone, swaps it for a long-lived token, and keeps only that.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <details>
+            <summary style="cursor:pointer;"><strong>Can't use a phone? Sign in manually</strong></summary>
+            <ol class="subtitle">
+                <li>On a computer, open a private browser window and go to <code>https://accounts.google.com/EmbeddedSetup</code>.</li>
+                <li>Sign in with the spare account and accept the terms if asked. The page may end up blank or spinning - that's fine.</li>
+                <li>Open the browser's developer tools (F12) → Application/Storage → Cookies → <code>accounts.google.com</code>, and copy the value of the <code>oauth_token</code> cookie (it starts with <code>oauth2_4/</code>).</li>
+                <li>Paste it below within a few minutes - it only works once.</li>
+            </ol>
+            <form method="post" action="/settings/google-play/manual-signin">
+                <label for="manual_email">Account email</label>
+                <input type="text" id="manual_email" name="email" inputmode="email" autocomplete="off" required>
+                <label for="oauth_token">oauth_token cookie value</label>
+                <input type="text" id="oauth_token" name="oauth_token" autocomplete="off" required>
+                <button type="submit">Sign in</button>
+            </form>
+        </details>
+    </div>
+</main>
+</body>
+</html>

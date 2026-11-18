@@ -71,18 +71,28 @@
         <h2>Status</h2>
         {% if app.source_type == "github" %}
         <p>Source: <a href="https://github.com/{{ app.github_repo }}">{{ app.github_repo }}</a></p>
+        {% else if app.source_type == "play" %}
+        <p>Source: Google Play - <a href="https://play.google.com/store/apps/details?id={{ app.package_name }}" target="_blank" rel="noopener">{{ app.package_name }}</a> <span class="subtitle">(via the account in <a href="/settings/google-play">Settings → Google Play</a>)</span></p>
         {% else %}
         <p>Source: manually uploaded</p>
         {% endif %}
         {% if let Some(tag) = app.latest_release_tag %}
         <p>Release on phones: <strong>{{ tag }}</strong></p>
+        {% let split_count = app.latest_splits().len() %}
+        {% if split_count > 0 %}
+        <p class="subtitle">Comes as {{ split_count + 1 }} pieces (a main APK plus {{ split_count }} split APKs), installed together - phones need launcher v0.55.0 or newer for this app.</p>
+        {% endif %}
         {% if let Some(apk) = app.latest_apk() %}
         {% include "partials/apk_facts.html" %}
         {% endif %}
         {% else %}
         <p class="subtitle">No release published yet.</p>
         {% endif %}
-        {% if app.package_name.is_empty() %}
+        {% if let Some(e) = app.last_check_error %}
+        <div class="error">Last update check failed: {{ e }}</div>
+        {% endif %}
+        {% if app.source_type == "play" %}
+        {% else if app.package_name.is_empty() %}
         <p class="subtitle">Android package: not detected yet - fills in automatically the first time a device reports this app newly installed.</p>
         {% else %}
         <p>Android package: <strong>{{ app.package_name }}</strong> <span class="subtitle">(detected automatically, not typed in)</span></p>
@@ -95,7 +105,7 @@
         {% endif %}
     </div>
 
-    {% if app.source_type == "github" %}
+    {% if app.source_type == "github" || app.source_type == "play" %}
     <div class="card">
         <form method="post" action="/apps/tracked/{{ app.id }}/check">
             <button type="submit">Check now</button>
@@ -112,6 +122,7 @@
     </div>
     {% endif %}
 
+    {% if app.source_type == "github" %}
     <div class="card">
         <form method="post" action="/apps/tracked/{{ app.id }}/include-prereleases">
             <label class="checkbox-row">
@@ -121,6 +132,7 @@
             <p class="hint">Needed for a repo that only ever publishes to a rolling/pre-release tag - otherwise a repo with no full releases will never be found.</p>
         </form>
     </div>
+    {% endif %}
     {% else %}
     <div class="card">
         <h2>Upload a new release</h2>
@@ -140,7 +152,7 @@
         <form method="post" action="/apps/tracked/{{ app.id }}/enabled">
             <label class="checkbox-row">
                 <input type="checkbox" name="enabled" value="on" {% if app.enabled %}checked{% endif %} onchange="this.form.submit()">
-                Enabled - {% if app.source_type == "github" %}checked automatically every hour{% else %}pushed to devices when synced{% endif %}
+                Enabled - {% if app.source_type == "github" || app.source_type == "play" %}checked automatically every hour{% else %}pushed to devices when synced{% endif %}
             </label>
         </form>
     </div>
