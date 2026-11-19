@@ -165,6 +165,9 @@ struct UnifiedAppRow {
     /// (see `device_install_progress.failed`) - a separate flag from `is_installing` so
     /// device_detail.html can style it distinctly rather than parsing `status_label`'s text.
     install_failed: bool,
+    /// Why the install failed, in plain words plus Android's own code - empty if not failed or the
+    /// launcher didn't say (older than v0.55.1). See `install_failure_text`.
+    failure_text: String,
     /// Precomputed rather than compared in the template (`status == AppRowStatus::NotInstalled`) -
     /// flags a catalog app that's checked but has nothing to actually push yet (no GitHub release
     /// synced, or a manual-upload app nobody's uploaded a build to yet). Selecting it used to
@@ -230,6 +233,47 @@ struct DeviceDetailTemplate {
     app_groups: Vec<AppGroupSummary>,
     /// Warning when app groups can't fully work on this phone, else empty.
     app_groups_note: String,
+}
+
+/// Turns Android's install failure message (e.g. "INSTALL_FAILED_OLDER_SDK: Requires newer sdk
+/// version #35 (current version is #34)") into something a parent can act on, keeping the original
+/// for anyone who wants the detail.
+fn install_failure_text(message: &str) -> String {
+    let hints = [
+        (
+            "INSTALL_FAILED_OLDER_SDK",
+            "needs a newer Android version than this device has",
+        ),
+        (
+            "INSTALL_FAILED_UPDATE_INCOMPATIBLE",
+            "a copy of this app signed by a different developer key is already on the device - \
+             uninstall that copy first",
+        ),
+        (
+            "INSTALL_FAILED_VERSION_DOWNGRADE",
+            "the device already has a newer version of this app",
+        ),
+        (
+            "INSTALL_FAILED_INSUFFICIENT_STORAGE",
+            "not enough free storage on the device",
+        ),
+        (
+            "INSTALL_FAILED_MISSING_SPLIT",
+            "a piece of this app is missing",
+        ),
+        (
+            "INSTALL_FAILED_NO_MATCHING_ABIS",
+            "this app isn't built for this device's processor",
+        ),
+        (
+            "Download failed",
+            "the device couldn't download it from this server",
+        ),
+    ];
+    match hints.iter().find(|(code, _)| message.contains(code)) {
+        Some((_, hint)) => format!("{hint} ({message})"),
+        None => message.to_string(),
+    }
 }
 
 /// Turns the device's reported `LockReason` enum name into something a parent can read.
@@ -322,17 +366,22 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
     // matches the client's own in-flight-attempt timeout (TrackedAppUpdateState) for consistency -
     // long enough to cover a slow download, short enough that an abandoned attempt's last-reported
     // percentage doesn't linger looking "in progress" forever.
-    let install_progress: std::collections::HashMap<i64, (i64, bool)> =
-        sqlx::query_as::<_, (i64, i64, bool)>(
-            "SELECT tracked_app_id, percent, failed FROM device_install_progress \
-             WHERE device_id = ? AND updated_at > datetime('now', '-10 minutes')",
+    // A failure stays visible for a day (not just 10 minutes) so a parent who checks back later
+    // still sees that - and why - it didn't install.
+    let install_progress: std::collections::HashMap<i64, (i64, bool, Option<String>)> =
+        sqlx::query_as::<_, (i64, i64, bool, Option<String>)>(
+            "SELECT tracked_app_id, percent, failed, failure_message FROM device_install_progress \
+             WHERE device_id = ? AND (updated_at > datetime('now', '-10 minutes') \
+             OR (failed = 1 AND updated_at > datetime('now', '-1 day')))",
         )
         .bind(id)
         .fetch_all(&state.db)
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|(tracked_app_id, percent, failed)| (tracked_app_id, (percent, failed)))
+        .map(|(tracked_app_id, percent, failed, message)| {
+            (tracked_app_id, (percent, failed, message))
+        })
         .collect();
 
     let mut apps: Vec<UnifiedAppRow> = Vec::new();
@@ -353,6 +402,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             },
             is_installing: false,
             install_failed: false,
+            failure_text: String::new(),
             checked: allowed.contains(&app.package_name),
             tracked_app_id: tracked_match.map(|t| t.id),
             show_no_release_hint: false,
@@ -374,16 +424,21 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             continue;
         }
         let has_release = t.latest_release_tag.is_some();
-        let progress = install_progress.get(&t.id).copied();
+        let progress = install_progress.get(&t.id);
         let (status_label, is_installing, install_failed) = match progress {
-            Some((_, true)) => ("Install failed".to_string(), false, true),
-            Some((percent, false)) => (format!("Installing {percent}%"), true, false),
+            Some((_, true, _)) => ("Install failed".to_string(), false, true),
+            Some((percent, false, _)) => (format!("Installing {percent}%"), true, false),
             None => ("Not installed".to_string(), false, false),
+        };
+        let failure_text = match progress {
+            Some((_, true, Some(message))) => install_failure_text(message),
+            _ => String::new(),
         };
         apps.push(UnifiedAppRow {
             status_label,
             is_installing,
             install_failed,
+            failure_text,
             checked: selected_app_ids.contains(&t.id),
             tracked_app_id: Some(t.id),
             show_no_release_hint: !has_release,
@@ -406,6 +461,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
                 status_label: "Installed".to_string(),
                 is_installing: false,
                 install_failed: false,
+                failure_text: String::new(),
                 checked: true,
                 tracked_app_id: Some(launcher.id),
                 show_no_release_hint: false,
@@ -837,4 +893,19 @@ pub async fn delete_device(
         .ok();
 
     Redirect::to("/")
+}
+
+#[cfg(test)]
+mod install_failure_tests {
+    use super::install_failure_text;
+
+    #[test]
+    fn explains_known_android_codes_and_keeps_the_original() {
+        let text = install_failure_text(
+            "INSTALL_FAILED_OLDER_SDK: Requires newer sdk version #35 (current version is #34)",
+        );
+        assert!(text.starts_with("needs a newer Android version"));
+        assert!(text.contains("current version is #34"));
+        assert_eq!(install_failure_text("something new"), "something new");
+    }
 }

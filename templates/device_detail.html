@@ -145,6 +145,9 @@
                     <span class="app-status" data-installing="{{ app.is_installing }}" data-failed="{{ app.install_failed }}">{{ app.status_label }}</span>
                     {% if app.show_no_release_hint %} <span class="subtitle">(no release yet - won't install until one's added)</span>{% endif %}
                 </label>
+                {% if !app.failure_text.is_empty() %}
+                <p class="subtitle" style="margin:-8px 0 12px 28px; color:var(--color-danger);">Why: {{ app.failure_text }}</p>
+                {% endif %}
             </form>
             {% endif %}
             {% endfor %}
