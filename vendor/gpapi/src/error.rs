@@ -65,7 +65,17 @@ impl From<String> for Error {
     }
 }
 
-impl StdError for Error {}
+impl StdError for Error {
+    // kid-phone-server change: expose the wrapped cause (e.g. reqwest's connection error) so the
+    // server can show *why* a request failed, not just "error sending request".
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match &self.kind {
+            ErrorKind::IO(e) => Some(e),
+            ErrorKind::Other(e) => Some(e.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

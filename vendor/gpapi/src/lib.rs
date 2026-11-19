@@ -1,7 +1,8 @@
-// Vendored into kid-phone-server from gpapi 6.1.0 (MIT, see LICENSE), with two changes: reqwest
-// uses rustls (via the server's process-wide ring provider) instead of native-tls/OpenSSL, and
+// Vendored into kid-phone-server from gpapi 6.1.0 (MIT, see LICENSE), with these changes: reqwest
+// uses rustls (via the server's process-wide ring provider) instead of native-tls/OpenSSL;
 // `download()` is removed along with its tokio-dl-stream-to-disk dependency - the server streams
-// the URLs from `get_download_info()` itself (see src/play.rs). Nothing else is modified.
+// the URLs from `get_download_info()` itself (see src/play.rs); the HTTP client never reuses
+// connections and has timeouts (`http_client()`); and `Error` exposes its cause via `source()`.
 //! A library for interacting with the Google Play API.
 //!
 //! # Getting Started
@@ -140,6 +141,20 @@ type AdditionalFilesDownloadInfo = Vec<(Option<String>, Option<String>)>;
 type DexMetadataURL = Option<String>;
 type DownloadInfo = (MainAPKDownloadURL, SplitsDownloadInfo, AdditionalFilesDownloadInfo, DexMetadataURL);
 
+/// The HTTP client every request goes through. kid-phone-server change: no pooled connections -
+/// the server keeps one logged-in session for ~45 minutes between rare calls, and reusing a
+/// keep-alive connection Google had meanwhile closed failed live with a bare "error sending
+/// request" on the Box (2026-11-18). A fresh connection per call costs nothing at this rate.
+/// Timeouts so a stalled call can't hang an update check forever.
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 #[derive(Debug)]
 pub struct Gpapi {
     locale: String,
@@ -180,7 +195,7 @@ impl Gpapi {
             tos_token: None,
             dfe_cookie: None,
             gsf_id: None,
-            client: Box::new(reqwest::Client::new()),
+            client: Box::new(http_client()),
         }
     }
 
@@ -216,7 +231,7 @@ impl Gpapi {
             tos_token: None,
             dfe_cookie: None,
             gsf_id: None,
-            client: Box::new(reqwest::Client::new()),
+            client: Box::new(http_client()),
         }
     }
 

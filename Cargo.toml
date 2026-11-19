@@ -1,6 +1,6 @@
 [package]
 name = "kid_phone_server"
-version = "0.24.0"
+version = "0.24.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
@@ -31,6 +31,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 # Google Play downloads (src/play.rs) - a vendored, rustls-only copy of EFF's gpapi crate, see
 # vendor/gpapi/Cargo.toml for what changed from upstream and why.
 gpapi = { path = "vendor/gpapi" }
+# Google Play's response message types (gpapi returns them but doesn't re-export the crate).
+googleplay-protobuf = "3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.10"
