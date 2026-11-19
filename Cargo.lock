@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "kid_phone_server"
-version = "0.24.3"
+version = "0.24.4"
 dependencies = [
  "argon2",
  "askama",
@@ -1184,6 +1184,7 @@ dependencies = [
  "googleplay-protobuf",
  "gpapi",
  "hex",
+ "libc",
  "pbkdf2",
  "qrcode",
  "reqwest",
