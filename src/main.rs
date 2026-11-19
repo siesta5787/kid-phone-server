@@ -1,5 +1,6 @@
 mod apk;
 mod box_api;
+mod disk;
 mod dns_engine;
 mod handlers;
 mod models;

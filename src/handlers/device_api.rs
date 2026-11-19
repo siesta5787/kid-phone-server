@@ -858,7 +858,10 @@ async fn send_apk(path: &str) -> axum::response::Response {
         return StatusCode::NOT_FOUND.into_response();
     };
     let length = file.metadata().await.map(|m| m.len()).ok();
-    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file));
+    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::with_capacity(
+        crate::disk::CacheDroppingReader::new(file),
+        64 * 1024,
+    ));
     let mut response = (
         [(
             header::CONTENT_TYPE,

@@ -480,6 +480,7 @@ async fn sync_github_app(state: &AppState, app: &TrackedApp) -> Result<(), Strin
         return Ok(());
     }
 
+    let _download_slot = wait_for_download_slot(app.id).await;
     let app_dir = format!("{TRACKED_APPS_DIR}/{}", app.id);
     tokio::fs::create_dir_all(&app_dir)
         .await
@@ -651,6 +652,7 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
         );
     }
 
+    let _download_slot = wait_for_download_slot(app.id).await;
     // Each Play release gets its own folder (base + splits), so removing it later is one folder.
     let release_dir = format!(
         "{TRACKED_APPS_DIR}/{}/play-{}",
@@ -728,6 +730,23 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
     stage_release(state, app, staged, first_release).await
 }
 
+/// Waits until no other app is downloading (see `disk::DOWNLOADS`), showing that on this app's page
+/// meanwhile. Held until the returned permit is dropped.
+async fn wait_for_download_slot(app_id: i64) -> tokio::sync::SemaphorePermit<'static> {
+    if let Ok(permit) = crate::disk::DOWNLOADS.try_acquire() {
+        return permit;
+    }
+    set_progress(
+        app_id,
+        "Waiting for another app's download to finish…",
+        None,
+    );
+    crate::disk::DOWNLOADS
+        .acquire()
+        .await
+        .expect("the download semaphore is never closed")
+}
+
 /// Checks a release's files are complete APKs (a readable zip with an AndroidManifest.xml) - the
 /// base and every split. A damaged one fails phone installs with INSTALL_PARSE_FAILED_NOT_APK,
 /// which is what two overlapping downloads into the same folder produced before v0.24.2.
@@ -794,6 +813,7 @@ async fn download_to_file(url: &str, path: &str, app_id: i64, stage: &str) -> Re
         .await
         .map_err(|e| e.to_string())?;
     let mut written: u64 = 0;
+    let mut since_flush: u64 = 0;
     while let Some(chunk) = response
         .chunk()
         .await
@@ -801,11 +821,20 @@ async fn download_to_file(url: &str, path: &str, app_id: i64, stage: &str) -> Re
     {
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
         written += chunk.len() as u64;
+        since_flush += chunk.len() as u64;
+        // Keep the unwritten backlog and cached copy small - see src/disk.rs for why.
+        if since_flush >= crate::disk::FLUSH_EVERY {
+            file.sync_data().await.map_err(|e| e.to_string())?;
+            crate::disk::drop_cached(std::os::fd::AsRawFd::as_raw_fd(&file));
+            since_flush = 0;
+        }
         if let Some(total) = total {
             set_progress(app_id, stage, Some((written * 100 / total).min(100) as u8));
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;
+    file.sync_data().await.map_err(|e| e.to_string())?;
+    crate::disk::drop_cached(std::os::fd::AsRawFd::as_raw_fd(&file));
     drop(file);
     tokio::fs::rename(&part, path)
         .await

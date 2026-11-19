@@ -1,6 +1,6 @@
 [package]
 name = "kid_phone_server"
-version = "0.24.3"
+version = "0.24.4"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
@@ -46,6 +46,9 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 # Streams APK downloads to phones straight from disk (handlers::device_api::send_apk) - Google Play
 # APKs can be hundreds of MB, too big to read into memory on a 512 MB Pi Zero.
 tokio-util = { version = "0.7", features = ["io"] }
+# posix_fadvise for src/disk.rs - keeps huge APK downloads from filling the Pi Zero's 512 MB
+# with cached file data (already in the dependency tree via tokio).
+libc = "0.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
