@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
 {% include "partials/head.html" %}
+{% if progress.is_some() %}
+<meta http-equiv="refresh" content="3">
+{% endif %}
 </head>
 <body>
 {% include "partials/app_header.html" %}
@@ -12,6 +15,16 @@
 
     {% if let Some(e) = error %}
     <div class="error">{{ e }}</div>
+    {% endif %}
+
+    {% if let Some(p) = progress %}
+    <div class="card check-progress">
+        <p><span class="spinner" aria-hidden="true"></span> <strong>Checking for updates:</strong> {{ p.stage }}{% if let Some(percent) = p.percent %} {{ percent }}%{% endif %}</p>
+        {% if let Some(percent) = p.percent %}
+        <progress max="100" value="{{ percent }}" style="width:100%;"></progress>
+        {% endif %}
+        <p class="hint">You can leave this page - the check keeps going on the server. Big apps can take a few minutes to download.</p>
+    </div>
     {% endif %}
 
     {% if app.is_launcher %}
@@ -108,7 +121,7 @@
     {% if app.source_type == "github" || app.source_type == "play" %}
     <div class="card">
         <form method="post" action="/apps/tracked/{{ app.id }}/check">
-            <button type="submit">Check now</button>
+            <button type="submit" data-busy="Starting…" {% if progress.is_some() %}disabled{% endif %}>Check now</button>
         </form>
     </div>
 

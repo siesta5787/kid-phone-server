@@ -272,9 +272,6 @@ pub async fn add_app(
         return Redirect::to("/apps/play/new");
     };
 
-    let background = state.clone();
-    tokio::spawn(async move {
-        crate::handlers::tracked_apps::sync_by_id(&background, id).await;
-    });
+    crate::handlers::tracked_apps::start_check(&state, id);
     Redirect::to(&format!("/apps/tracked/{id}"))
 }

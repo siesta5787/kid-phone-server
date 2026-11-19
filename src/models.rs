@@ -552,6 +552,9 @@ pub struct InstallProgressReport {
     pub percent: i64,
     #[serde(default)]
     pub failed: bool,
+    /// Why it failed (launcher v0.55.1+) - see migrations/0027_install_failure_message.sql.
+    #[serde(default)]
+    pub message: Option<String>,
 }
 
 /// One blocked-domain event as reported by the device - see
