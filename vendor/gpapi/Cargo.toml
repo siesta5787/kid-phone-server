@@ -1,7 +1,8 @@
 # Vendored copy of gpapi 6.1.0 (https://github.com/EFForg/rs-google-play, MIT - see LICENSE).
 # Changed from upstream: reqwest uses rustls (no native-tls/OpenSSL, which the server's
 # aarch64-musl cross build doesn't have), and the tokio-dl-stream-to-disk dependency is gone
-# along with gpapi's own download() - see the note at the top of src/lib.rs.
+# along with gpapi's own download(); its HTTP client doesn't reuse connections and has timeouts;
+# and its Error reports its cause - see the note at the top of src/lib.rs.
 [package]
 name = "gpapi"
 version = "6.1.0"

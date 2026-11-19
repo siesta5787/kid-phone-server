@@ -77,6 +77,22 @@ where
         .map_err(|e| format!("Google Play call crashed: {e}"))?
 }
 
+/// An error and every cause under it ("error sending request for url (...): connection closed
+/// before message completed: ..."), so a failure on the Box says what actually went wrong.
+fn describe(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut text = error.to_string();
+    let mut cause = error.source();
+    while let Some(inner) = cause {
+        let inner_text = inner.to_string();
+        if !text.contains(&inner_text) {
+            text.push_str(": ");
+            text.push_str(&inner_text);
+        }
+        cause = inner.source();
+    }
+    text
+}
+
 /// One logged-in Play session shared by every caller, so the hourly update check and the admin
 /// pages don't each do a full checkin + login. Dropped on sign-out and whenever a call fails.
 static SESSION: Mutex<Option<(Arc<Gpapi>, Instant)>> = Mutex::const_new(None);
@@ -111,13 +127,13 @@ async fn login(email: String, aas_token: String) -> Result<Gpapi, String> {
         let first = api
             .login()
             .await
-            .map_err(|e| (e.to_string(), e.kind_is_tos()));
+            .map_err(|e| (describe(&e), e.kind_is_tos()));
         match first {
             Ok(()) => Ok(api),
             // A fresh account has to accept Play's terms once before anything else works.
             Err((_, true)) => {
-                api.accept_tos().await.map_err(|e| e.to_string())?;
-                api.login().await.map_err(|e| e.to_string())?;
+                api.accept_tos().await.map_err(|e| describe(e.as_ref()))?;
+                api.login().await.map_err(|e| describe(&e))?;
                 Ok(api)
             }
             Err((message, false)) => Err(format!("Google Play sign-in failed: {message}")),
@@ -167,8 +183,9 @@ pub async fn sign_in(state: &AppState, email: &str, oauth_token: &str) -> Result
             .await
             .map_err(|e| {
                 format!(
-                    "Google didn't accept the sign-in code ({e}). Codes only work once - sign \
-                     in again for a new one."
+                    "Google didn't accept the sign-in code ({}). Codes only work once - sign \
+                     in again for a new one.",
+                    describe(&e)
                 )
             })?;
         api.get_aas_token()
@@ -221,27 +238,48 @@ pub struct PlayApp {
     pub download_size: Option<i64>,
 }
 
-/// The current Play listing for `package_name`, or an error a parent can read.
-pub async fn lookup(state: &AppState, package_name: &str) -> Result<PlayApp, String> {
+async fn details_once(
+    state: &AppState,
+    package_name: &str,
+) -> Result<Option<googleplay_protobuf::DetailsResponse>, String> {
     let api = session(state).await?;
     let package = package_name.to_string();
-    let response = run_gpapi(move || async move {
+    run_gpapi(move || async move {
         api.details(package.as_str())
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| describe(e.as_ref()))
     })
-    .await;
-    let response = match response {
+    .await
+}
+
+/// The current Play listing for `package_name`, or an error a parent can read. A failed call is
+/// retried once with a brand-new session (fresh login) before giving up.
+pub async fn lookup(state: &AppState, package_name: &str) -> Result<PlayApp, String> {
+    let response = match details_once(state, package_name).await {
         Ok(r) => r,
-        Err(e) => {
+        Err(first) => {
+            tracing::warn!("Google Play lookup of {package_name} failed, retrying: {first}");
             drop_session().await;
-            return Err(format!("Google Play lookup failed: {e}"));
+            match details_once(state, package_name).await {
+                Ok(r) => r,
+                Err(e) => {
+                    drop_session().await;
+                    return Err(format!("Google Play lookup failed: {e}"));
+                }
+            }
         }
     };
 
     let item = response
         .and_then(|r| r.item)
-        .ok_or_else(|| format!("{package_name} isn't on Google Play (or isn't available here)."))?;
+        // Google also answers an empty response when it rejects the sign-in, so say so.
+        .ok_or_else(|| {
+            format!(
+                "Google Play returned nothing for {package_name}: it isn't on Google Play, isn't \
+                 available in this country, or the server's Google sign-in stopped working \
+                 (press Test on Settings → Google Play)."
+            )
+        })?;
     let app = item
         .details
         .as_ref()
@@ -279,6 +317,30 @@ pub async fn lookup(state: &AppState, package_name: &str) -> Result<PlayApp, Str
     })
 }
 
+/// gpapi's `get_download_info` result: main APK URL, split (name, URL)s, additional files, dex
+/// metadata URL.
+type DownloadInfo = (
+    Option<String>,
+    Vec<(Option<String>, Option<String>)>,
+    Vec<(Option<String>, Option<String>)>,
+    Option<String>,
+);
+
+async fn download_info_once(
+    state: &AppState,
+    package_name: &str,
+    version_code: i64,
+) -> Result<DownloadInfo, String> {
+    let api = session(state).await?;
+    let package = package_name.to_string();
+    run_gpapi(move || async move {
+        api.get_download_info(package.as_str(), Some(version_code))
+            .await
+            .map_err(|e| describe(&e))
+    })
+    .await
+}
+
 /// Where to download one Play release from.
 pub struct PlayFiles {
     pub main_url: String,
@@ -289,26 +351,29 @@ pub struct PlayFiles {
     pub has_additional_files: bool,
 }
 
+/// Download links for one release - retried once with a fresh session, like [lookup].
 pub async fn files(
     state: &AppState,
     package_name: &str,
     version_code: i64,
 ) -> Result<PlayFiles, String> {
-    let api = session(state).await?;
-    let package = package_name.to_string();
-    let info = run_gpapi(move || async move {
-        api.get_download_info(package.as_str(), Some(version_code))
-            .await
-            .map_err(|e| e.to_string())
-    })
-    .await;
-    let (main_url, splits, additional, _dex_metadata) = match info {
+    let info = match download_info_once(state, package_name, version_code).await {
         Ok(info) => info,
-        Err(e) => {
+        Err(first) => {
+            tracing::warn!(
+                "Google Play download info for {package_name} failed, retrying: {first}"
+            );
             drop_session().await;
-            return Err(format!("Google Play wouldn't provide a download: {e}"));
+            match download_info_once(state, package_name, version_code).await {
+                Ok(info) => info,
+                Err(e) => {
+                    drop_session().await;
+                    return Err(format!("Google Play wouldn't provide a download: {e}"));
+                }
+            }
         }
     };
+    let (main_url, splits, additional, _dex_metadata) = info;
     Ok(PlayFiles {
         main_url: main_url.ok_or("Google Play didn't provide a download link")?,
         splits: splits
