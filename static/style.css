@@ -558,3 +558,24 @@ th {
         grid-template-columns: 1fr;
     }
 }
+
+/* Busy indicators - see static/busy.js and the app page's update-check card. */
+.spinner {
+    display: inline-block;
+    width: 0.9em;
+    height: 0.9em;
+    border: 2px solid var(--color-border);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    vertical-align: -0.1em;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+button[disabled] {
+    opacity: 0.7;
+    cursor: progress;
+}

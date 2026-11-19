@@ -16,7 +16,7 @@
     <p class="subtitle">Open the app on <a href="https://play.google.com/store/apps" target="_blank" rel="noopener">play.google.com</a>, copy the address from your browser, and paste it here - or type the app's package name.</p>
     <form method="get" action="/apps/play/new" class="inline-controls">
         <input type="text" name="q" value="{{ query }}" placeholder="https://play.google.com/store/apps/details?id=..." aria-label="Google Play link or package name" style="flex:1; min-width:14em;" required autofocus>
-        <button type="submit" class="button-small">Look up</button>
+        <button type="submit" class="button-small" data-busy="Looking up…">Look up</button>
     </form>
 
     {% if !error.is_empty() %}
@@ -43,7 +43,7 @@
             <input type="hidden" name="package_name" value="{{ app.package_name }}">
             <label for="name">Name in your catalog</label>
             <input type="text" id="name" name="name" value="{{ app.title }}" maxlength="80">
-            <button type="submit">Add to catalog</button>
+            <button type="submit" data-busy="Adding…">Add to catalog</button>
         </form>
         <p class="hint">The server downloads it right away and checks for updates every hour. To put it on a phone, tick it in that device's Apps list.</p>
         {% endif %}

@@ -30,7 +30,7 @@
         {% endif %}
         <div class="inline-controls">
             <form method="post" action="/settings/google-play/test">
-                <button type="submit" class="button-small">Test</button>
+                <button type="submit" class="button-small" data-busy="Testing…">Test</button>
             </form>
             <form method="post" action="/settings/google-play/sign-out" onsubmit="return confirm('Sign the server out of Google Play? Google Play apps stop updating until you sign in again.');">
                 <button type="submit" class="button-small button-secondary">Sign out</button>
@@ -79,7 +79,7 @@
                 <input type="text" id="manual_email" name="email" inputmode="email" autocomplete="off" required>
                 <label for="oauth_token">oauth_token cookie value</label>
                 <input type="text" id="oauth_token" name="oauth_token" autocomplete="off" required>
-                <button type="submit">Sign in</button>
+                <button type="submit" data-busy="Signing in…">Sign in</button>
             </form>
         </details>
     </div>

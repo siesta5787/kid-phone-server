@@ -426,6 +426,16 @@ async fn backfill_release_info(state: &AppState) {
 /// `upload_tracked_app_release`. Used by both the scheduled loop and the admin's manual "Check
 /// now" button, so they can never drift apart.
 async fn sync_one_app(state: &AppState, app: &TrackedApp) -> Result<(), String> {
+    // Never two checks of the same app at once (hourly loop + "Check now", or a double click):
+    // they'd download into the same folder. The later one just skips.
+    let Some(_guard) = begin_check(app.id) else {
+        return Ok(());
+    };
+    run_check(state, app).await
+}
+
+/// The check itself, for a caller already holding the app's [CheckGuard].
+async fn run_check(state: &AppState, app: &TrackedApp) -> Result<(), String> {
     let result = match app.source_type.as_str() {
         "github" => sync_github_app(state, app).await,
         "play" => sync_play_app(state, app).await,
@@ -441,6 +451,7 @@ async fn sync_one_app(state: &AppState, app: &TrackedApp) -> Result<(), String> 
 }
 
 async fn sync_github_app(state: &AppState, app: &TrackedApp) -> Result<(), String> {
+    set_progress(app.id, "Checking GitHub for a new release…", None);
     let release = fetch_latest_release(&app.github_repo, app.include_prereleases).await?;
 
     sqlx::query("UPDATE tracked_apps SET last_checked_at = datetime('now') WHERE id = ?")
@@ -469,29 +480,21 @@ async fn sync_github_app(state: &AppState, app: &TrackedApp) -> Result<(), Strin
         return Ok(());
     }
 
-    let client = reqwest::Client::builder()
-        .user_agent("kid-phone-server (self-hosted, github.com)")
-        .timeout(Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let bytes = client
-        .get(&asset.browser_download_url)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .bytes()
-        .await
-        .map_err(|e| e.to_string())?;
-
     let app_dir = format!("{TRACKED_APPS_DIR}/{}", app.id);
     tokio::fs::create_dir_all(&app_dir)
         .await
         .map_err(|e| e.to_string())?;
     let file_path = format!("{app_dir}/{}-{}.apk", release.tag_name, asset.id);
-    tokio::fs::write(&file_path, &bytes)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Streamed to disk (not held in memory whole), with progress for the app page.
+    download_to_file(
+        &asset.browser_download_url,
+        &file_path,
+        app.id,
+        "Downloading…",
+    )
+    .await?;
 
+    set_progress(app.id, "Checking the download…", None);
     let apk = analyze_file(&file_path).await;
     let staged = StagedRelease {
         tag: release.tag_name.clone(),
@@ -503,21 +506,85 @@ async fn sync_github_app(state: &AppState, app: &TrackedApp) -> Result<(), Strin
     stage_release(state, app, staged, false).await
 }
 
-/// Runs one app's update check right away, outside the hourly loop - used when a Google Play app
-/// is first added, so its first release downloads without waiting up to an hour. Errors are
-/// stored on the app (`last_check_error`) by `sync_one_app` itself.
-pub async fn sync_by_id(state: &AppState, id: i64) {
-    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
-    if let Some(app) = app {
-        if let Err(e) = sync_one_app(state, &app).await {
-            tracing::warn!("tracked app '{}' first sync failed: {e}", app.name);
+/// What a running update check is doing right now, for the app page's live status line. Kept in
+/// memory only - it means nothing once the check ends (or the server restarts).
+#[derive(Clone)]
+pub struct CheckProgress {
+    pub stage: String,
+    /// Download progress, when the current stage is a download of known size.
+    pub percent: Option<u8>,
+}
+
+static CHECKS: std::sync::Mutex<Option<HashMap<i64, CheckProgress>>> = std::sync::Mutex::new(None);
+
+/// Marks app `id` as being checked until dropped - see [begin_check].
+pub struct CheckGuard(i64);
+
+impl Drop for CheckGuard {
+    fn drop(&mut self) {
+        if let Ok(mut checks) = CHECKS.lock() {
+            if let Some(map) = checks.as_mut() {
+                map.remove(&self.0);
+            }
         }
     }
+}
+
+/// Claims app `id` for a check, or None if one is already running for it.
+fn begin_check(id: i64) -> Option<CheckGuard> {
+    let mut checks = CHECKS.lock().ok()?;
+    let map = checks.get_or_insert_with(HashMap::new);
+    if map.contains_key(&id) {
+        return None;
+    }
+    map.insert(
+        id,
+        CheckProgress {
+            stage: "Starting…".to_string(),
+            percent: None,
+        },
+    );
+    Some(CheckGuard(id))
+}
+
+fn set_progress(id: i64, stage: &str, percent: Option<u8>) {
+    if let Ok(mut checks) = CHECKS.lock() {
+        if let Some(entry) = checks.as_mut().and_then(|m| m.get_mut(&id)) {
+            entry.stage = stage.to_string();
+            entry.percent = percent;
+        }
+    }
+}
+
+/// The running check of app `id`, if any.
+pub fn check_progress(id: i64) -> Option<CheckProgress> {
+    CHECKS.lock().ok()?.as_ref()?.get(&id).cloned()
+}
+
+/// Starts app `id`'s update check in the background and returns at once - "Check now" and a newly
+/// added Google Play app's first download, which can take minutes for a big app. The app page
+/// shows [check_progress] meanwhile and any error afterwards (`last_check_error`). Returns false
+/// if a check of that app is already running.
+pub fn start_check(state: &AppState, id: i64) -> bool {
+    let Some(guard) = begin_check(id) else {
+        return false;
+    };
+    let state = state.clone();
+    tokio::spawn(async move {
+        let _guard = guard;
+        let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+        if let Some(app) = app {
+            if let Err(e) = run_check(&state, &app).await {
+                tracing::warn!("tracked app '{}' check failed: {e}", app.name);
+            }
+        }
+    });
+    true
 }
 
 /// A Google Play app's update check (see src/play.rs): asks Play for the current version, and
@@ -528,6 +595,7 @@ pub async fn sync_by_id(state: &AppState, id: i64) {
 /// Apps Play only delivers as several "split" APKs, or with extra OBB data files, are refused
 /// with a readable reason for now - launchers can only install a single APK so far.
 async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String> {
+    set_progress(app.id, "Asking Google Play for the latest version…", None);
     let listing = crate::play::lookup(state, &app.package_name).await?;
 
     sqlx::query("UPDATE tracked_apps SET last_checked_at = datetime('now') WHERE id = ?")
@@ -557,6 +625,7 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
         return Ok(());
     }
 
+    set_progress(app.id, "Getting download links from Google Play…", None);
     let files = crate::play::files(state, &app.package_name, listing.version_code).await?;
     if files.has_additional_files {
         return Err(
@@ -576,12 +645,20 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
         .map_err(|e| e.to_string())?;
     let file_path = format!("{release_dir}/base.apk");
     let mut splits = Vec::new();
+    let pieces = files.splits.len() + 1;
+    let piece_label = |n: usize| {
+        if pieces == 1 {
+            "Downloading…".to_string()
+        } else {
+            format!("Downloading piece {n} of {pieces}…")
+        }
+    };
     let downloaded = async {
-        download_to_file(&files.main_url, &file_path).await?;
+        download_to_file(&files.main_url, &file_path, app.id, &piece_label(1)).await?;
         for (index, (name, url)) in files.splits.iter().enumerate() {
             // Never a Play-supplied name in the path - it only goes in the JSON.
             let path = format!("{release_dir}/split-{index}.apk");
-            download_to_file(url, &path).await?;
+            download_to_file(url, &path, app.id, &piece_label(index + 2)).await?;
             splits.push(ReleaseSplit {
                 name: name.clone(),
                 path,
@@ -595,6 +672,7 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
         return Err(e);
     }
 
+    set_progress(app.id, "Checking the download…", None);
     let apk = analyze_file(&file_path).await;
     let staged = StagedRelease {
         tag,
@@ -611,11 +689,13 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
 }
 
 /// Streams a download to `path` via a `.part` file, so a cut-off download never looks like a
-/// finished APK. Play APKs can be hundreds of MB - never held in memory whole.
-async fn download_to_file(url: &str, path: &str) -> Result<(), String> {
+/// finished APK. Play APKs can be hundreds of MB - never held in memory whole. Reports progress
+/// for app `app_id` under `stage` (e.g. "Downloading piece 2 of 3…") - see [check_progress].
+async fn download_to_file(url: &str, path: &str, app_id: i64, stage: &str) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
 
     let client = reqwest::Client::builder()
+        .user_agent("kid-phone-server (self-hosted)")
         .timeout(Duration::from_secs(30 * 60))
         .build()
         .map_err(|e| e.to_string())?;
@@ -625,16 +705,23 @@ async fn download_to_file(url: &str, path: &str) -> Result<(), String> {
         .await
         .and_then(|r| r.error_for_status())
         .map_err(|e| format!("download failed: {e}"))?;
+    let total = response.content_length().filter(|&n| n > 0);
+    set_progress(app_id, stage, total.map(|_| 0));
     let part = format!("{path}.part");
     let mut file = tokio::fs::File::create(&part)
         .await
         .map_err(|e| e.to_string())?;
+    let mut written: u64 = 0;
     while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|e| format!("download failed: {e}"))?
     {
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        written += chunk.len() as u64;
+        if let Some(total) = total {
+            set_progress(app_id, stage, Some((written * 100 / total).min(100) as u8));
+        }
     }
     file.flush().await.map_err(|e| e.to_string())?;
     drop(file);
@@ -803,6 +890,8 @@ struct TrackedAppDetailTemplate {
     title: String,
     app: TrackedApp,
     error: Option<String>,
+    /// A running update check - the page shows it and refreshes itself until it ends.
+    progress: Option<CheckProgress>,
 }
 
 pub async fn view_tracked_app(
@@ -831,6 +920,7 @@ async fn render_detail(
     Html(
         TrackedAppDetailTemplate {
             title: app.name.clone(),
+            progress: check_progress(app.id),
             app,
             error,
         }
@@ -840,20 +930,12 @@ async fn render_detail(
     .into_response()
 }
 
+/// "Check now": starts the check in the background and returns straight to the app page, which
+/// shows live progress (see [check_progress]) and refreshes itself until it's done - a Google Play
+/// download can take minutes, and the page used to hang that long.
 pub async fn check_now(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
-    let app = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
-
-    let Some(app) = app else {
-        return (axum::http::StatusCode::NOT_FOUND, "App not found").into_response();
-    };
-
-    let error = sync_one_app(&state, &app).await.err();
-    render_detail(&state, id, error).await
+    start_check(&state, id);
+    Redirect::to(&format!("/apps/tracked/{id}"))
 }
 
 /// Manual-source apps' only path to a new release: the admin types a label
@@ -1260,5 +1342,26 @@ mod tests {
         assert_eq!(parse_hold_days("-3"), 0);
         assert_eq!(parse_hold_days("400"), MAX_HOLD_DAYS);
         assert_eq!(parse_hold_days("soon"), 0);
+    }
+}
+
+#[cfg(test)]
+mod check_progress_tests {
+    use super::{begin_check, check_progress, set_progress};
+
+    #[test]
+    fn one_check_per_app_until_the_guard_drops() {
+        let guard = begin_check(-42).expect("first check starts");
+        assert!(
+            begin_check(-42).is_none(),
+            "second check of the same app is refused"
+        );
+        set_progress(-42, "Downloading…", Some(40));
+        let progress = check_progress(-42).expect("running check is visible");
+        assert_eq!(progress.stage, "Downloading…");
+        assert_eq!(progress.percent, Some(40));
+        drop(guard);
+        assert!(check_progress(-42).is_none(), "finished check disappears");
+        assert!(begin_check(-42).is_some(), "app can be checked again");
     }
 }
