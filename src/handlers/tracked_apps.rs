@@ -606,19 +606,36 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
 
     let tag = format!("{} ({})", listing.version_name, listing.version_code);
     let key = release_key(&tag, None);
-    let seen = [
-        app.latest_release_tag
-            .as_deref()
-            .map(|t| release_key(t, None)),
-        app.pending_release_tag
-            .as_deref()
-            .map(|t| release_key(t, None)),
-        app.rejected_release_key.clone(),
-    ];
-    if seen.iter().flatten().any(|k| k == &key) {
+    if app.rejected_release_key.as_deref() == Some(key.as_str()) {
         return Ok(());
     }
-    if app
+    // A release already downloaded is only "done" if its files are intact - one damaged before
+    // v0.24.2 (two checks of the same app could download into the same folder at once) gets
+    // downloaded again: a live one is repaired in place, a pending one re-staged.
+    let is_live = app.latest_release_tag.as_deref() == Some(tag.as_str());
+    let is_pending = app.pending_release_tag.as_deref() == Some(tag.as_str());
+    let mut repair_live = false;
+    if is_live {
+        let base = app.latest_release_file_path.clone().unwrap_or_default();
+        match verify_release_files(&base, &app.latest_splits()).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                tracing::warn!(
+                    "'{}' live release is damaged, downloading again: {e}",
+                    app.name
+                );
+                repair_live = true;
+            }
+        }
+    } else if is_pending {
+        let base = app.pending_release_file_path.clone().unwrap_or_default();
+        if verify_release_files(&base, &app.pending_splits())
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+    } else if app
         .latest_apk()
         .is_some_and(|live| listing.version_code <= live.version_code)
     {
@@ -667,12 +684,35 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
         Ok::<(), String>(())
     }
     .await;
-    if let Err(e) = downloaded {
+    let verified = match downloaded {
+        Ok(()) => {
+            set_progress(app.id, "Checking the download…", None);
+            verify_release_files(&file_path, &splits).await
+        }
+        Err(e) => Err(e),
+    };
+    if let Err(e) = verified {
         tokio::fs::remove_dir_all(&release_dir).await.ok();
         return Err(e);
     }
 
-    set_progress(app.id, "Checking the download…", None);
+    if repair_live {
+        // Same version, fresh intact files at the same place - point the live release at them.
+        // Phones that failed to install it retry on their own (after their hour's back-off).
+        sqlx::query(
+            "UPDATE tracked_apps SET latest_release_file_path = ?, latest_release_splits_json = ? \
+             WHERE id = ?",
+        )
+        .bind(&file_path)
+        .bind(splits_json(&splits))
+        .bind(app.id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+        tracing::info!("'{}' live release repaired", app.name);
+        return Ok(());
+    }
+
     let apk = analyze_file(&file_path).await;
     let staged = StagedRelease {
         tag,
@@ -686,6 +726,48 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
     // updates get the normal checks.
     let first_release = app.latest_release_file_path.is_none();
     stage_release(state, app, staged, first_release).await
+}
+
+/// Checks a release's files are complete APKs (a readable zip with an AndroidManifest.xml) - the
+/// base and every split. A damaged one fails phone installs with INSTALL_PARSE_FAILED_NOT_APK,
+/// which is what two overlapping downloads into the same folder produced before v0.24.2.
+async fn verify_release_files(base: &str, splits: &[ReleaseSplit]) -> Result<(), String> {
+    let mut paths = vec![base.to_string()];
+    paths.extend(splits.iter().map(|s| s.path.clone()));
+    let count = paths.len();
+    for (index, path) in paths.into_iter().enumerate() {
+        let checked = tokio::task::spawn_blocking(move || verify_apk_file(&path))
+            .await
+            .map_err(|e| e.to_string())?;
+        checked.map_err(|why| {
+            format!(
+                "Downloaded piece {} of {count} isn't a complete APK ({why}). It's downloaded again \
+                 on the next check.",
+                index + 1
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn verify_apk_file(path: &str) -> Result<(), String> {
+    use std::io::Read;
+
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let mut head = [0u8; 4];
+    let read = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .unwrap_or(0);
+    let detail = |why: &str| {
+        let start: String = head[..read].iter().map(|b| format!("{b:02x}")).collect();
+        format!("{why}; {size} bytes, starts with {start}")
+    };
+    let file = std::fs::File::open(path).map_err(|e| detail(&e.to_string()))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| detail(&e.to_string()))?;
+    archive
+        .by_name("AndroidManifest.xml")
+        .map_err(|_| detail("no AndroidManifest.xml"))?;
+    Ok(())
 }
 
 /// Streams a download to `path` via a `.part` file, so a cut-off download never looks like a
@@ -1363,5 +1445,35 @@ mod check_progress_tests {
         drop(guard);
         assert!(check_progress(-42).is_none(), "finished check disappears");
         assert!(begin_check(-42).is_some(), "app can be checked again");
+    }
+}
+
+#[cfg(test)]
+mod verify_tests {
+    use super::verify_apk_file;
+    use std::io::Write;
+
+    #[test]
+    fn rejects_truncated_and_accepts_complete_apks() {
+        let dir = std::env::temp_dir().join(format!("kps-verify-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = dir.join("good.apk");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&good).unwrap());
+        zip.start_file(
+            "AndroidManifest.xml",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(b"manifest").unwrap();
+        zip.finish().unwrap();
+        assert!(verify_apk_file(good.to_str().unwrap()).is_ok());
+
+        let bytes = std::fs::read(&good).unwrap();
+        let cut = dir.join("cut.apk");
+        std::fs::write(&cut, &bytes[..bytes.len() / 2]).unwrap();
+        let err = verify_apk_file(cut.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("starts with 504b"), "{err}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
