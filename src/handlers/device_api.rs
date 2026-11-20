@@ -180,6 +180,7 @@ pub async fn policy(
         None => (None, None),
     };
 
+    let vpn_bypass_packages = policy.vpn_bypass_packages();
     let app_groups = crate::handlers::app_groups::groups_for_device(&state, device.id)
         .await
         .iter()
@@ -207,6 +208,7 @@ pub async fn policy(
         lock_override,
         lock_override_until_ms,
         app_groups,
+        vpn_bypass_packages,
     })
     .into_response()
 }

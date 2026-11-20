@@ -182,6 +182,10 @@ async fn main() {
             post(handlers::devices::set_lock_override),
         )
         .route(
+            "/devices/{id}/vpn-bypass",
+            post(handlers::devices::set_vpn_bypass),
+        )
+        .route(
             "/devices/{id}/app-groups",
             get(handlers::app_groups::show_app_groups).post(handlers::app_groups::create_group),
         )

@@ -234,6 +234,15 @@ struct DeviceDetailTemplate {
     app_groups: Vec<AppGroupSummary>,
     /// Warning when app groups can't fully work on this phone, else empty.
     app_groups_note: String,
+    /// The "Apps that skip the content filter" checkboxes - see [set_vpn_bypass].
+    vpn_bypass_apps: Vec<VpnBypassRow>,
+    vpn_bypass_count: usize,
+}
+
+struct VpnBypassRow {
+    package_name: String,
+    label: String,
+    checked: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -572,6 +581,23 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         .map(|s| lock_reason_label(&s.lock_reason))
         .unwrap_or_default();
 
+    // Allowed apps (the only ones a kid can open), plus any already skipping the filter so they
+    // can always be unticked again.
+    let bypassed: std::collections::HashSet<String> =
+        policy.vpn_bypass_packages().into_iter().collect();
+    let mut vpn_bypass_apps: Vec<VpnBypassRow> = installed
+        .iter()
+        .filter(|app| allowed.contains(&app.package_name) || bypassed.contains(&app.package_name))
+        .map(|app| VpnBypassRow {
+            package_name: app.package_name.clone(),
+            label: app.label.clone(),
+            checked: bypassed.contains(&app.package_name),
+        })
+        .collect();
+    vpn_bypass_apps.sort_by_key(|row| row.label.to_lowercase());
+    vpn_bypass_apps.dedup_by(|a, b| a.package_name == b.package_name);
+    let vpn_bypass_count = vpn_bypass_apps.iter().filter(|row| row.checked).count();
+
     let groups = app_groups::groups_for_device(&state, id).await;
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let app_groups_note = app_groups::usage_note(&groups, latest_status.as_ref());
@@ -594,6 +620,8 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             lock_state_label,
             app_groups,
             app_groups_note,
+            vpn_bypass_apps,
+            vpn_bypass_count,
         }
         .render()
         .unwrap(),
@@ -957,6 +985,42 @@ pub async fn set_lock_override(
     let _ = state.command_notify.send(id);
 
     Redirect::to(&format!("/devices/{id}"))
+}
+
+/// Saves which apps skip the launcher's content-filter VPN on this device (repeated `packages`
+/// checkboxes, so raw form parsing - see the `Form` gotcha in CLAUDE.md). For apps that refuse to
+/// work while any VPN is running: the launcher (v0.57.0+) leaves them out of the VPN entirely, so
+/// Android reports no VPN to them - and their traffic isn't filtered. Delivered like any policy
+/// save (SSE nudge, then the phone re-fetches its policy).
+pub async fn set_vpn_bypass(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Extension(_admin): Extension<CurrentAdmin>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    let mut packages: Vec<String> = form_urlencoded::parse(&body)
+        .filter(|(key, _)| key == "packages")
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|p| !p.is_empty() && p.len() <= 255)
+        .collect();
+    packages.sort();
+    packages.dedup();
+    let json = (!packages.is_empty())
+        .then(|| serde_json::to_string(&packages).unwrap_or_else(|_| "[]".to_string()));
+
+    sqlx::query(
+        "UPDATE device_policy SET vpn_bypass_json = ?, updated_at = datetime('now') \
+         WHERE device_id = ?",
+    )
+    .bind(json)
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .ok();
+
+    let _ = state.command_notify.send(id);
+
+    Redirect::to(&format!("/devices/{id}#vpn-bypass"))
 }
 
 pub async fn delete_device(
