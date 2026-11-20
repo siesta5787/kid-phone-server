@@ -169,6 +169,10 @@ async fn main() {
         )
         .route("/devices/{id}", get(handlers::devices::view_device))
         .route(
+            "/devices/{id}/install-status",
+            get(handlers::devices::install_status),
+        )
+        .route(
             "/devices/{id}/policy",
             post(handlers::devices::update_policy),
         )
@@ -228,8 +232,9 @@ async fn main() {
         )
         .route(
             "/apps/tracked/{id}/upload",
-            post(handlers::tracked_apps::upload_tracked_app_release)
-                .layer(DefaultBodyLimit::max(200 * 1024 * 1024)),
+            post(handlers::tracked_apps::upload_tracked_app_release).layer(DefaultBodyLimit::max(
+                (handlers::tracked_apps::MAX_UPLOAD_GB * 1024 * 1024 * 1024) as usize,
+            )),
         )
         .route(
             "/apps/tracked/{id}/check",

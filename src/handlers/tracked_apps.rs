@@ -730,6 +730,65 @@ async fn sync_play_app(state: &AppState, app: &TrackedApp) -> Result<(), String>
     stage_release(state, app, staged, first_release).await
 }
 
+/// "about 4 min left" / "less than a minute left" from how long `done` of `total` bytes took -
+/// None for the first few seconds, when the rate isn't meaningful yet.
+fn time_left(elapsed_secs: f64, done: u64, total: u64) -> Option<String> {
+    if elapsed_secs < 5.0 || done == 0 || done >= total {
+        return None;
+    }
+    let seconds = elapsed_secs * (total - done) as f64 / done as f64;
+    Some(if seconds < 60.0 {
+        "less than a minute left".to_string()
+    } else {
+        format!("about {} min left", (seconds / 60.0).round() as u64)
+    })
+}
+
+/// Writes one uploaded multipart file to `path` chunk by chunk, with the same flush-and-drop-cache
+/// treatment as downloads (see src/disk.rs). Returns the number of bytes written.
+async fn save_upload(
+    mut field: axum::extract::multipart::Field<'_>,
+    path: &str,
+) -> Result<u64, String> {
+    use tokio::io::AsyncWriteExt;
+
+    let failed = || "Failed to save the uploaded file.".to_string();
+    let mut file = tokio::fs::File::create(path).await.map_err(|_| failed())?;
+    let mut written: u64 = 0;
+    let mut since_flush: u64 = 0;
+    loop {
+        let chunk = match field.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(e) => return Err(upload_error_text(&e.to_string())),
+        };
+        file.write_all(&chunk).await.map_err(|_| failed())?;
+        written += chunk.len() as u64;
+        since_flush += chunk.len() as u64;
+        if since_flush >= crate::disk::FLUSH_EVERY {
+            file.sync_data().await.map_err(|_| failed())?;
+            crate::disk::drop_cached(std::os::fd::AsRawFd::as_raw_fd(&file));
+            since_flush = 0;
+        }
+    }
+    file.flush().await.map_err(|_| failed())?;
+    file.sync_data().await.map_err(|_| failed())?;
+    crate::disk::drop_cached(std::os::fd::AsRawFd::as_raw_fd(&file));
+    Ok(written)
+}
+
+/// A readable reason for a failed upload - axum reports a too-big body as a "length limit" error.
+fn upload_error_text(error: &str) -> String {
+    if error.to_lowercase().contains("length limit") {
+        format!("That file is bigger than the {MAX_UPLOAD_GB} GB upload limit.")
+    } else {
+        format!("The upload didn't finish ({error}). Try again.")
+    }
+}
+
+/// Largest APK accepted by the manual upload form - see the route's `DefaultBodyLimit` in main.rs.
+pub const MAX_UPLOAD_GB: u64 = 4;
+
 /// Waits until no other app is downloading (see `disk::DOWNLOADS`), showing that on this app's page
 /// meanwhile. Held until the returned permit is dropped.
 async fn wait_for_download_slot(app_id: i64) -> tokio::sync::SemaphorePermit<'static> {
@@ -808,6 +867,7 @@ async fn download_to_file(url: &str, path: &str, app_id: i64, stage: &str) -> Re
         .map_err(|e| format!("download failed: {e}"))?;
     let total = response.content_length().filter(|&n| n > 0);
     set_progress(app_id, stage, total.map(|_| 0));
+    let started = std::time::Instant::now();
     let part = format!("{path}.part");
     let mut file = tokio::fs::File::create(&part)
         .await
@@ -829,7 +889,13 @@ async fn download_to_file(url: &str, path: &str, app_id: i64, stage: &str) -> Re
             since_flush = 0;
         }
         if let Some(total) = total {
-            set_progress(app_id, stage, Some((written * 100 / total).min(100) as u8));
+            // "Downloading piece 2 of 3… · about 4 min left" once there's enough to estimate from.
+            let elapsed = started.elapsed().as_secs_f64();
+            let label = match time_left(elapsed, written, total) {
+                Some(left) => format!("{stage} · {left}"),
+                None => stage.to_string(),
+            };
+            set_progress(app_id, &label, Some((written * 100 / total).min(100) as u8));
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;
@@ -1068,40 +1134,6 @@ pub async fn upload_tracked_app_release(
         return (axum::http::StatusCode::NOT_FOUND, "App not found").into_response();
     };
 
-    let mut release_label: Option<String> = None;
-    let mut apk_bytes: Option<Vec<u8>> = None;
-
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = field.name().unwrap_or("").to_string();
-        match name.as_str() {
-            "release_label" => {
-                release_label = field.text().await.ok().map(|s| s.trim().to_string());
-            }
-            "apk" => {
-                apk_bytes = field.bytes().await.ok().map(|b| b.to_vec());
-            }
-            _ => {}
-        }
-    }
-
-    let (Some(release_label), Some(apk_bytes)) = (release_label, apk_bytes) else {
-        return render_detail(
-            &state,
-            id,
-            Some("Fill in a release label and choose a file.".to_string()),
-        )
-        .await;
-    };
-
-    if release_label.is_empty() || apk_bytes.is_empty() {
-        return render_detail(
-            &state,
-            id,
-            Some("Fill in a release label and choose a file.".to_string()),
-        )
-        .await;
-    }
-
     let app_dir = format!("{TRACKED_APPS_DIR}/{id}");
     if tokio::fs::create_dir_all(&app_dir).await.is_err() {
         return render_detail(
@@ -1112,13 +1144,40 @@ pub async fn upload_tracked_app_release(
         .await;
     }
     let file_path = format!("{app_dir}/{}.apk", random_label());
-    if tokio::fs::write(&file_path, &apk_bytes).await.is_err() {
-        return render_detail(
-            &state,
-            id,
-            Some("Failed to save the uploaded file.".to_string()),
-        )
-        .await;
+
+    // Streamed straight to disk as it arrives - it used to be read whole into memory first, which
+    // a large APK on a 512 MB Pi Zero can't afford (the same freeze big downloads caused).
+    let mut release_label: Option<String> = None;
+    let mut saved: Option<Result<u64, String>> = None;
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                saved = Some(Err(upload_error_text(&e.to_string())));
+                break;
+            }
+        };
+        match field.name().unwrap_or("") {
+            "release_label" => {
+                release_label = field.text().await.ok().map(|s| s.trim().to_string());
+            }
+            "apk" => saved = Some(save_upload(field, &file_path).await),
+            _ => {}
+        }
+    }
+
+    let release_label = release_label.unwrap_or_default();
+    let error = match saved {
+        None => Some("Choose an APK file to upload.".to_string()),
+        Some(Err(e)) => Some(e),
+        Some(Ok(0)) => Some("The uploaded file was empty.".to_string()),
+        Some(Ok(_)) if release_label.is_empty() => Some("Fill in a release label.".to_string()),
+        Some(Ok(_)) => None,
+    };
+    if let Some(error) = error {
+        tokio::fs::remove_file(&file_path).await.ok();
+        return render_detail(&state, id, Some(error)).await;
     }
 
     sqlx::query("UPDATE tracked_apps SET last_checked_at = datetime('now') WHERE id = ?")
@@ -1504,5 +1563,28 @@ mod verify_tests {
         assert!(err.contains("starts with 504b"), "{err}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod time_left_tests {
+    use super::time_left;
+
+    #[test]
+    fn estimates_from_the_rate_so_far() {
+        assert_eq!(time_left(2.0, 10, 100), None, "too early to tell");
+        assert_eq!(
+            time_left(60.0, 50, 100).as_deref(),
+            Some("about 1 min left")
+        );
+        assert_eq!(
+            time_left(60.0, 25, 100).as_deref(),
+            Some("about 3 min left")
+        );
+        assert_eq!(
+            time_left(10.0, 90, 100).as_deref(),
+            Some("less than a minute left")
+        );
+        assert_eq!(time_left(10.0, 100, 100), None, "done");
     }
 }

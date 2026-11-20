@@ -168,6 +168,8 @@ struct UnifiedAppRow {
     /// Why the install failed, in plain words plus Android's own code - empty if not failed or the
     /// launcher didn't say (older than v0.55.1). See `install_failure_text`.
     failure_text: String,
+    /// Ticked to install but not on the phone yet - progress.js keeps polling while any row is.
+    awaiting_install: bool,
     /// Precomputed rather than compared in the template (`status == AppRowStatus::NotInstalled`) -
     /// flags a catalog app that's checked but has nothing to actually push yet (no GitHub release
     /// synced, or a manual-upload app nobody's uploaded a build to yet). Selecting it used to
@@ -211,10 +213,6 @@ struct DeviceDetailTemplate {
     title: String,
     device: Device,
     apps: Vec<UnifiedAppRow>,
-    /// Precomputed rather than an `{% if %}` expression in the template - Askama's expression
-    /// grammar doesn't support closures, so `apps.iter().any(|a| a.is_installing)` can't be
-    /// written directly there.
-    any_app_installing: bool,
     pin_configured: bool,
     offline_override_used: bool,
     vpn_filter_enabled: bool,
@@ -233,6 +231,40 @@ struct DeviceDetailTemplate {
     app_groups: Vec<AppGroupSummary>,
     /// Warning when app groups can't fully work on this phone, else empty.
     app_groups_note: String,
+}
+
+#[derive(serde::Serialize)]
+struct InstallStatusEntry {
+    percent: i64,
+    failed: bool,
+}
+
+#[derive(serde::Serialize)]
+struct InstallStatus {
+    apps: std::collections::HashMap<String, InstallStatusEntry>,
+}
+
+/// The device's current install progress per catalog app, for the device page's live status
+/// labels (static/progress.js) - same freshness rules as `view_device`.
+pub async fn install_status(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    let rows = sqlx::query_as::<_, (i64, i64, bool)>(
+        "SELECT tracked_app_id, percent, failed FROM device_install_progress \
+         WHERE device_id = ? AND (updated_at > datetime('now', '-10 minutes') \
+         OR (failed = 1 AND updated_at > datetime('now', '-1 day')))",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    axum::Json(InstallStatus {
+        apps: rows
+            .into_iter()
+            .map(|(app, percent, failed)| (app.to_string(), InstallStatusEntry { percent, failed }))
+            .collect(),
+    })
 }
 
 /// Turns Android's install failure message (e.g. "INSTALL_FAILED_OLDER_SDK: Requires newer sdk
@@ -403,6 +435,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             is_installing: false,
             install_failed: false,
             failure_text: String::new(),
+            awaiting_install: false,
             checked: allowed.contains(&app.package_name),
             tracked_app_id: tracked_match.map(|t| t.id),
             show_no_release_hint: false,
@@ -427,7 +460,12 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         let progress = install_progress.get(&t.id);
         let (status_label, is_installing, install_failed) = match progress {
             Some((_, true, _)) => ("Install failed".to_string(), false, true),
-            Some((percent, false, _)) => (format!("Installing {percent}%"), true, false),
+            // The phone reports 100% once the download is done; Android's own install of a big
+            // app can take minutes more after that.
+            Some((percent, false, _)) if *percent >= 100 => {
+                ("Installing…".to_string(), true, false)
+            }
+            Some((percent, false, _)) => (format!("Downloading {percent}%"), true, false),
             None => ("Not installed".to_string(), false, false),
         };
         let failure_text = match progress {
@@ -439,6 +477,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             is_installing,
             install_failed,
             failure_text,
+            awaiting_install: selected_app_ids.contains(&t.id) && has_release && !install_failed,
             checked: selected_app_ids.contains(&t.id),
             tracked_app_id: Some(t.id),
             show_no_release_hint: !has_release,
@@ -462,6 +501,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
                 is_installing: false,
                 install_failed: false,
                 failure_text: String::new(),
+                awaiting_install: false,
                 checked: true,
                 tracked_app_id: Some(launcher.id),
                 show_no_release_hint: false,
@@ -476,7 +516,6 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         .as_ref()
         .map(|s| s.offline_override_used)
         .unwrap_or(false);
-    let any_app_installing = apps.iter().any(|a| a.is_installing);
 
     let now_ms = now_epoch_ms();
     let (lock_override, lock_override_remaining) = match policy.active_lock_override(now_ms) {
@@ -501,7 +540,6 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
     Html(
         DeviceDetailTemplate {
             title: device.name.clone(),
-            any_app_installing,
             pin_configured: policy.override_pin_hash.is_some(),
             offline_override_used,
             vpn_filter_enabled: policy.vpn_filter_enabled,
