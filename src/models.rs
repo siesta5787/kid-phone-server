@@ -597,6 +597,9 @@ pub struct TrackedAppUpdate {
     pub package_name: String,
     pub release_tag: String,
     pub download_url: String,
+    /// Size of `download_url`'s file in bytes - with the splits' sizes, lets the phone show true
+    /// overall progress and time left (launcher v0.55.2+).
+    pub size: Option<u64>,
     pub is_launcher: bool,
     /// The release's split APKs, installed in the same session as `download_url`'s base APK -
     /// empty for single-APK releases. Only ever non-empty for launchers that can install them.
@@ -607,6 +610,7 @@ pub struct TrackedAppUpdate {
 pub struct TrackedAppSplit {
     pub name: String,
     pub download_url: String,
+    pub size: Option<u64>,
 }
 
 // ---------------------------------------------------------------------

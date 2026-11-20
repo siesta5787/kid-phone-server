@@ -781,34 +781,42 @@ pub async fn tracked_app_updates(
     .unwrap_or(0);
     let can_install_splits = launcher_version_code >= MIN_SPLIT_APK_LAUNCHER_VERSION_CODE;
 
-    let updates: Vec<TrackedAppUpdate> = apps
-        .into_iter()
-        .filter_map(|app| {
-            let split_count = app.latest_splits().len();
-            if split_count > 0 && !can_install_splits {
-                return None;
-            }
-            let tag = app.latest_release_tag?;
-            let release_tag = match app.latest_release_asset_id {
-                Some(asset_id) => format!("{tag}@{asset_id}"),
-                None => tag,
-            };
-            Some(TrackedAppUpdate {
-                id: app.id,
-                name: app.name,
-                package_name: app.package_name,
-                release_tag,
-                download_url: format!("/api/devices/apps/{}/download", app.id),
-                is_launcher: app.is_launcher,
-                splits: (0..split_count)
-                    .map(|index| TrackedAppSplit {
-                        name: format!("split{index}"),
-                        download_url: format!("/api/devices/apps/{}/split/{index}", app.id),
-                    })
-                    .collect(),
-            })
-        })
-        .collect();
+    let mut updates: Vec<TrackedAppUpdate> = Vec::new();
+    for app in apps {
+        let splits = app.latest_splits();
+        if !splits.is_empty() && !can_install_splits {
+            continue;
+        }
+        let Some(tag) = app.latest_release_tag.clone() else {
+            continue;
+        };
+        let release_tag = match app.latest_release_asset_id {
+            Some(asset_id) => format!("{tag}@{asset_id}"),
+            None => tag,
+        };
+        let size = match &app.latest_release_file_path {
+            Some(path) => file_size(path).await,
+            None => None,
+        };
+        let mut split_entries = Vec::new();
+        for (index, split) in splits.iter().enumerate() {
+            split_entries.push(TrackedAppSplit {
+                name: format!("split{index}"),
+                download_url: format!("/api/devices/apps/{}/split/{index}", app.id),
+                size: file_size(&split.path).await,
+            });
+        }
+        updates.push(TrackedAppUpdate {
+            id: app.id,
+            name: app.name,
+            package_name: app.package_name,
+            release_tag,
+            download_url: format!("/api/devices/apps/{}/download", app.id),
+            size,
+            is_launcher: app.is_launcher,
+            splits: split_entries,
+        });
+    }
 
     Json(updates).into_response()
 }
@@ -849,6 +857,10 @@ pub async fn tracked_app_split_download(
         return StatusCode::NOT_FOUND.into_response();
     };
     send_apk(&split.path).await
+}
+
+async fn file_size(path: &str) -> Option<u64> {
+    tokio::fs::metadata(path).await.ok().map(|m| m.len())
 }
 
 /// Streams an APK from disk with its length set, so the phone can show download progress and the

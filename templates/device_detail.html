@@ -125,7 +125,7 @@
         {% if apps.is_empty() %}
         <p class="subtitle">Nothing to show yet - the phone hasn't reported its installed apps, and nothing's been added to the <a href="/apps">Apps</a> catalog either.</p>
         {% else %}
-        <div class="app-checkbox-list">
+        <div class="app-checkbox-list" data-install-status-url="/devices/{{ device.id }}/install-status">
             {% for app in apps %}
             {% if app.is_launcher %}
             <label class="checkbox-row">
@@ -142,7 +142,7 @@
                 <label class="checkbox-row">
                     <input type="checkbox" name="selected" {% if app.checked %}checked{% endif %} onchange="this.form.submit()">
                     {{ app.label }}
-                    <span class="app-status" data-installing="{{ app.is_installing }}" data-failed="{{ app.install_failed }}">{{ app.status_label }}</span>
+                    <span class="app-status" data-installing="{{ app.is_installing }}" data-failed="{{ app.install_failed }}" data-awaiting="{{ app.awaiting_install }}"{% if let Some(tid) = app.tracked_app_id %} data-tracked-app-id="{{ tid }}"{% endif %}>{{ app.status_label }}</span>
                     {% if app.show_no_release_hint %} <span class="subtitle">(no release yet - won't install until one's added)</span>{% endif %}
                 </label>
                 {% if !app.failure_text.is_empty() %}
@@ -155,16 +155,8 @@
         {% endif %}
     </div>
 
-    {% if any_app_installing %}
-    <script>
-        // Live progress has no push mechanism to this page - the server only ever gets a fresh
-        // percentage when the device reports one (see /api/devices/apps/progress), so this page
-        // has to poll for it. Only reloads while something here is actually installing - once
-        // nothing is, this block isn't rendered at all on the next load, so the polling stops
-        // itself rather than running forever on an otherwise-idle device page.
-        setTimeout(() => location.reload(), 3000);
-    </script>
-    {% endif %}
+    {# Live install progress (no full reloads): static/progress.js polls this device's reported
+       install status while an app is being installed or waiting to be. #}
 
     <form method="post" action="/devices/{{ device.id }}/policy" class="card">
         <h2>Quick Controls (swipe-left screen)</h2>
