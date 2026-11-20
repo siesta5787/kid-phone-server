@@ -52,9 +52,20 @@ pub struct DevicePolicy {
     pub lock_override: Option<String>,
     /// When [Self::lock_override] lapses back to the schedule (epoch millis), None = no end time.
     pub lock_override_until_ms: Option<i64>,
+    /// Apps that skip the content filter - use [DevicePolicy::vpn_bypass_packages]. See
+    /// migrations/0029_vpn_bypass.sql.
+    pub vpn_bypass_json: Option<String>,
 }
 
 impl DevicePolicy {
+    /// Package names left out of the launcher's content-filter VPN on this device.
+    pub fn vpn_bypass_packages(&self) -> Vec<String> {
+        self.vpn_bypass_json
+            .as_deref()
+            .and_then(|j| serde_json::from_str(j).ok())
+            .unwrap_or_default()
+    }
+
     /// [Self::lock_override] and its end time, or None if there isn't one or it has expired.
     pub fn active_lock_override(&self, now_ms: i64) -> Option<(&str, Option<i64>)> {
         let mode = self.lock_override.as_deref()?;
@@ -425,6 +436,9 @@ pub struct PolicyResponse {
     /// This device's app groups - the phone suspends a group's apps while it's paused, outside
     /// its allowed hours, or out of daily time. See [AppGroupPolicy] and `handlers::app_groups`.
     pub app_groups: Vec<AppGroupPolicy>,
+    /// Apps the launcher leaves out of its content-filter VPN (launcher v0.57.0+) - for apps that
+    /// refuse to work while a VPN is running. See migrations/0029_vpn_bypass.sql.
+    pub vpn_bypass_packages: Vec<String>,
 }
 
 /// One [AppGroup] as the phone needs it. Already-expired overrides are never sent, same as

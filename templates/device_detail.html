@@ -203,6 +203,26 @@
         <button type="submit">Save changes</button>
     </form>
 
+    <div class="card" id="vpn-bypass">
+        <h2>Apps that skip the content filter</h2>
+        <p class="subtitle">For apps that refuse to work while a VPN is running. A ticked app is left out of the launcher's filter entirely, so the phone tells it there's no VPN - but ads and blocked sites aren't filtered for that app. Most apps can be fooled this way; a few look for the VPN another way and still notice it. Needs launcher v0.57.0 or newer.</p>
+        {% if vpn_bypass_apps.is_empty() %}
+        <p class="subtitle">No allowed apps reported by this phone yet.</p>
+        {% else %}
+        <details{% if vpn_bypass_count > 0 %} open{% endif %}>
+            <summary>{% if vpn_bypass_count == 0 %}None skip it{% else if vpn_bypass_count == 1 %}1 app skips it{% else %}{{ vpn_bypass_count }} apps skip it{% endif %} - choose apps</summary>
+            <form method="post" action="/devices/{{ device.id }}/vpn-bypass">
+                {% for app in vpn_bypass_apps %}
+                <label class="checkbox-row">
+                    <input type="checkbox" name="packages" value="{{ app.package_name }}" {% if app.checked %}checked{% endif %} onchange="this.form.submit()">
+                    {{ app.label }}
+                </label>
+                {% endfor %}
+            </form>
+        </details>
+        {% endif %}
+    </div>
+
     <div class="card">
         <details>
             <summary class="button-danger" style="display:inline-block; cursor:pointer; list-style:none;">Remove this device&hellip;</summary>
