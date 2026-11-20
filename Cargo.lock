@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "kid_phone_server"
-version = "0.24.5"
+version = "0.25.0"
 dependencies = [
  "argon2",
  "askama",

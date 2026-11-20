@@ -115,8 +115,10 @@ fn splits_json(splits: &[ReleaseSplit]) -> Option<String> {
 /// its own `play-*` folder - that folder once it's empty.
 async fn remove_release_files(base: &str, splits: &[ReleaseSplit]) {
     tokio::fs::remove_file(base).await.ok();
+    crate::direct::remove_fingerprint(base).await;
     for split in splits {
         tokio::fs::remove_file(&split.path).await.ok();
+        crate::direct::remove_fingerprint(&split.path).await;
     }
     let parent = std::path::Path::new(base).parent();
     if let Some(dir) = parent.filter(|d| {
@@ -852,6 +854,7 @@ fn verify_apk_file(path: &str) -> Result<(), String> {
 /// finished APK. Play APKs can be hundreds of MB - never held in memory whole. Reports progress
 /// for app `app_id` under `stage` (e.g. "Downloading piece 2 of 3…") - see [check_progress].
 async fn download_to_file(url: &str, path: &str, app_id: i64, stage: &str) -> Result<(), String> {
+    use sha2::Digest;
     use tokio::io::AsyncWriteExt;
 
     let client = reqwest::Client::builder()
@@ -874,12 +877,15 @@ async fn download_to_file(url: &str, path: &str, app_id: i64, stage: &str) -> Re
         .map_err(|e| e.to_string())?;
     let mut written: u64 = 0;
     let mut since_flush: u64 = 0;
+    // Worked out on the way past, for phones downloading straight from the source (src/direct.rs).
+    let mut hasher = sha2::Sha256::new();
     while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|e| format!("download failed: {e}"))?
     {
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        hasher.update(&chunk);
         written += chunk.len() as u64;
         since_flush += chunk.len() as u64;
         // Keep the unwritten backlog and cached copy small - see src/disk.rs for why.
@@ -902,9 +908,13 @@ async fn download_to_file(url: &str, path: &str, app_id: i64, stage: &str) -> Re
     file.sync_data().await.map_err(|e| e.to_string())?;
     crate::disk::drop_cached(std::os::fd::AsRawFd::as_raw_fd(&file));
     drop(file);
+    // The old fingerprint goes first, so a repaired file never sits next to a stale one.
+    crate::direct::remove_fingerprint(path).await;
     tokio::fs::rename(&part, path)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    crate::direct::save_fingerprint(path, &hex::encode(hasher.finalize()), written).await;
+    Ok(())
 }
 
 /// Background task: checks every enabled tracked app on a fixed interval, after publishing any
@@ -925,11 +935,19 @@ pub async fn run_scheduled_tracked_app_sync(state: AppState) {
             .await
             .unwrap_or_default();
 
-        for app in apps {
-            if let Err(e) = sync_one_app(&state, &app).await {
+        for app in &apps {
+            if let Err(e) = sync_one_app(&state, app).await {
                 tracing::warn!("tracked app '{}' sync failed: {e}", app.name);
             }
         }
+
+        // After the checks, with fresh rows: anything they just downloaded is fingerprinted
+        // already, so this only reads releases from before direct downloads existed.
+        let apps = sqlx::query_as::<_, TrackedApp>("SELECT * FROM tracked_apps WHERE enabled = 1")
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default();
+        crate::direct::backfill(&apps).await;
     }
 }
 

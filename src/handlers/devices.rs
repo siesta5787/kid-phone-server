@@ -170,6 +170,9 @@ struct UnifiedAppRow {
     failure_text: String,
     /// Ticked to install but not on the phone yet - progress.js keeps polling while any row is.
     awaiting_install: bool,
+    /// Already on the phone, so any progress is an update ("Updating 45%"), and once its download
+    /// is done it's "Installed" again rather than "Installing…".
+    is_update: bool,
     /// Precomputed rather than compared in the template (`status == AppRowStatus::NotInstalled`) -
     /// flags a catalog app that's checked but has nothing to actually push yet (no GitHub release
     /// synced, or a manual-upload app nobody's uploaded a build to yet). Selecting it used to
@@ -237,6 +240,20 @@ struct DeviceDetailTemplate {
 struct InstallStatusEntry {
     percent: i64,
     failed: bool,
+    /// " from Google Play" etc, or empty - see [source_suffix].
+    source: &'static str,
+}
+
+/// Where the phone said it's downloading from, as shown after the percentage ("Downloading 45%
+/// from Google Play") - so a parent can tell a direct download (launcher v0.56.0+, see
+/// src/direct.rs) from one off this server. Empty for older launchers, which don't say.
+fn source_suffix(source: Option<&str>) -> &'static str {
+    match source {
+        Some("google_play") => " from Google Play",
+        Some("github") => " from GitHub",
+        Some("server") => " from this server",
+        _ => "",
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -250,8 +267,8 @@ pub async fn install_status(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let rows = sqlx::query_as::<_, (i64, i64, bool)>(
-        "SELECT tracked_app_id, percent, failed FROM device_install_progress \
+    let rows = sqlx::query_as::<_, (i64, i64, bool, Option<String>)>(
+        "SELECT tracked_app_id, percent, failed, source FROM device_install_progress \
          WHERE device_id = ? AND (updated_at > datetime('now', '-10 minutes') \
          OR (failed = 1 AND updated_at > datetime('now', '-1 day')))",
     )
@@ -262,7 +279,16 @@ pub async fn install_status(
     axum::Json(InstallStatus {
         apps: rows
             .into_iter()
-            .map(|(app, percent, failed)| (app.to_string(), InstallStatusEntry { percent, failed }))
+            .map(|(app, percent, failed, source)| {
+                (
+                    app.to_string(),
+                    InstallStatusEntry {
+                        percent,
+                        failed,
+                        source: source_suffix(source.as_deref()),
+                    },
+                )
+            })
             .collect(),
     })
 }
@@ -400,9 +426,10 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
     // percentage doesn't linger looking "in progress" forever.
     // A failure stays visible for a day (not just 10 minutes) so a parent who checks back later
     // still sees that - and why - it didn't install.
-    let install_progress: std::collections::HashMap<i64, (i64, bool, Option<String>)> =
-        sqlx::query_as::<_, (i64, i64, bool, Option<String>)>(
-            "SELECT tracked_app_id, percent, failed, failure_message FROM device_install_progress \
+    let install_progress: std::collections::HashMap<i64, (i64, bool, Option<String>, &str)> =
+        sqlx::query_as::<_, (i64, i64, bool, Option<String>, Option<String>)>(
+            "SELECT tracked_app_id, percent, failed, failure_message, source \
+             FROM device_install_progress \
              WHERE device_id = ? AND (updated_at > datetime('now', '-10 minutes') \
              OR (failed = 1 AND updated_at > datetime('now', '-1 day')))",
         )
@@ -411,8 +438,11 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         .await
         .unwrap_or_default()
         .into_iter()
-        .map(|(tracked_app_id, percent, failed, message)| {
-            (tracked_app_id, (percent, failed, message))
+        .map(|(tracked_app_id, percent, failed, message, source)| {
+            (
+                tracked_app_id,
+                (percent, failed, message, source_suffix(source.as_deref())),
+            )
         })
         .collect();
 
@@ -426,13 +456,19 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         let tracked_match = all_tracked
             .iter()
             .find(|t| !t.package_name.is_empty() && t.package_name == app.package_name);
+        // An update on its way - only while it's downloading: once the phone reports 100% the
+        // installed version is about to be replaced, so "Installed" is right again.
+        let updating = tracked_match
+            .and_then(|t| install_progress.get(&t.id))
+            .filter(|(percent, failed, _, _)| !failed && *percent < 100);
         apps.push(UnifiedAppRow {
-            status_label: if app.preinstalled {
-                "Preinstalled".to_string()
-            } else {
-                "Installed".to_string()
+            status_label: match updating {
+                Some((percent, _, _, source)) => format!("Updating {percent}%{source}"),
+                None if app.preinstalled => "Preinstalled".to_string(),
+                None => "Installed".to_string(),
             },
-            is_installing: false,
+            is_update: true,
+            is_installing: updating.is_some(),
             install_failed: false,
             failure_text: String::new(),
             awaiting_install: false,
@@ -459,17 +495,19 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         let has_release = t.latest_release_tag.is_some();
         let progress = install_progress.get(&t.id);
         let (status_label, is_installing, install_failed) = match progress {
-            Some((_, true, _)) => ("Install failed".to_string(), false, true),
+            Some((_, true, _, _)) => ("Install failed".to_string(), false, true),
             // The phone reports 100% once the download is done; Android's own install of a big
             // app can take minutes more after that.
-            Some((percent, false, _)) if *percent >= 100 => {
+            Some((percent, false, _, _)) if *percent >= 100 => {
                 ("Installing…".to_string(), true, false)
             }
-            Some((percent, false, _)) => (format!("Downloading {percent}%"), true, false),
+            Some((percent, false, _, source)) => {
+                (format!("Downloading {percent}%{source}"), true, false)
+            }
             None => ("Not installed".to_string(), false, false),
         };
         let failure_text = match progress {
-            Some((_, true, Some(message))) => install_failure_text(message),
+            Some((_, true, Some(message), _)) => install_failure_text(message),
             _ => String::new(),
         };
         apps.push(UnifiedAppRow {
@@ -477,6 +515,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             is_installing,
             install_failed,
             failure_text,
+            is_update: false,
             awaiting_install: selected_app_ids.contains(&t.id) && has_release && !install_failed,
             checked: selected_app_ids.contains(&t.id),
             tracked_app_id: Some(t.id),
@@ -498,6 +537,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             0,
             UnifiedAppRow {
                 status_label: "Installed".to_string(),
+                is_update: true,
                 is_installing: false,
                 install_failed: false,
                 failure_text: String::new(),

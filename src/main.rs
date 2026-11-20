@@ -1,5 +1,6 @@
 mod apk;
 mod box_api;
+mod direct;
 mod disk;
 mod dns_engine;
 mod handlers;
@@ -433,6 +434,10 @@ async fn main() {
         .route(
             "/api/devices/apps/{id}/split/{index}",
             get(handlers::device_api::tracked_app_split_download),
+        )
+        .route(
+            "/api/devices/apps/{id}/direct",
+            get(handlers::device_api::tracked_app_direct),
         )
         .route(
             "/api/devices/apps/progress",

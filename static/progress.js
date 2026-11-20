@@ -3,8 +3,9 @@
 //    much has been uploaded and roughly how long is left, then "checking" while the server reads
 //    the APK. The server's reply (the app page, with any error) then replaces this page.
 // 2. The device page's Apps list (data-install-status-url) polls the phone's reported install
-//    progress and updates the status labels in place - "Downloading 45% · about 6 min left",
-//    then "Installing…" - instead of the page sitting on "Not installed".
+//    progress and updates the status labels in place - "Downloading 45% from Google Play · about
+//    6 min left", then "Installing…" - instead of the page sitting on "Not installed". An app
+//    already on the phone shows "Updating 45%…", then "Installed" again.
 
 function megabytes(bytes) {
     return (bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0) + " MB";
@@ -89,6 +90,14 @@ document.addEventListener("submit", (event) => {
                     if (label.dataset.failed !== "true") reload = true;
                     return;
                 }
+                const update = label.dataset.update === "true";
+                if (update && entry.percent >= 100) {
+                    // The update's downloaded and handed to Android.
+                    if (tracked[id]) label.textContent = "Installed";
+                    delete tracked[id];
+                    label.dataset.installing = "false";
+                    return;
+                }
                 tracked[id] = true;
                 label.dataset.installing = "true";
                 if (entry.percent >= 100) {
@@ -99,7 +108,8 @@ document.addEventListener("submit", (event) => {
                 const seen = firstSeen[id] || (firstSeen[id] = { t: now, p: entry.percent });
                 const gained = entry.percent - seen.p;
                 const left = gained > 0 ? timeLeft(((now - seen.t) * (100 - entry.percent)) / gained) : "";
-                label.textContent = "Downloading " + entry.percent + "%" + (left ? " · " + left : "");
+                label.textContent = (update ? "Updating " : "Downloading ") + entry.percent + "%" +
+                    (entry.source || "") + (left ? " · " + left : "");
             });
             if (reload) location.reload();
         } catch (e) {

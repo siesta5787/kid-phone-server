@@ -555,6 +555,10 @@ pub struct InstallProgressReport {
     /// Why it failed (launcher v0.55.1+) - see migrations/0027_install_failure_message.sql.
     #[serde(default)]
     pub message: Option<String>,
+    /// Where it's downloading from (launcher v0.56.0+): `google_play`, `github` or `server` - see
+    /// migrations/0028_direct_downloads.sql.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// One blocked-domain event as reported by the device - see
@@ -611,6 +615,27 @@ pub struct TrackedAppSplit {
     pub name: String,
     pub download_url: String,
     pub size: Option<u64>,
+}
+
+/// `GET /api/devices/apps/{id}/direct` - fresh links to a release's files straight from Google Play
+/// or GitHub, and what each must match - see src/direct.rs.
+#[derive(Serialize)]
+pub struct DirectDownloads {
+    /// `google_play` or `github`.
+    pub source: String,
+    /// Same value as [TrackedAppUpdate::release_tag], so the phone can tell the links are for the
+    /// release it's about to install.
+    pub release_tag: String,
+    /// Base APK first, then the splits in [TrackedAppUpdate::splits] order.
+    pub files: Vec<DirectDownloadFile>,
+}
+
+#[derive(Serialize)]
+pub struct DirectDownloadFile {
+    pub url: String,
+    /// Lowercase hex SHA-256 of this server's copy.
+    pub sha256: String,
+    pub size: u64,
 }
 
 // ---------------------------------------------------------------------

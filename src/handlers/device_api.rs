@@ -696,11 +696,13 @@ pub async fn install_progress(
 ) -> impl IntoResponse {
     sqlx::query(
         "INSERT INTO device_install_progress \
-         (device_id, tracked_app_id, percent, failed, failure_message, updated_at) \
-         VALUES (?, ?, ?, ?, ?, datetime('now')) \
+         (device_id, tracked_app_id, percent, failed, failure_message, source, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now')) \
          ON CONFLICT(device_id, tracked_app_id) DO UPDATE SET \
          percent = excluded.percent, failed = excluded.failed, \
-         failure_message = excluded.failure_message, updated_at = excluded.updated_at",
+         failure_message = excluded.failure_message, \
+         source = excluded.source, \
+         updated_at = excluded.updated_at",
     )
     .bind(device.id)
     .bind(report.tracked_app_id)
@@ -713,6 +715,13 @@ pub async fn install_progress(
             .as_deref()
             .filter(|_| report.failed)
             .map(|m| m.chars().take(500).collect::<String>()),
+    )
+    // Only the known values, so nothing else ever reaches the page.
+    .bind(
+        report
+            .source
+            .as_deref()
+            .filter(|s| matches!(*s, "google_play" | "github" | "server")),
     )
     .execute(&state.db)
     .await
@@ -857,6 +866,45 @@ pub async fn tracked_app_split_download(
         return StatusCode::NOT_FOUND.into_response();
     };
     send_apk(&split.path).await
+}
+
+/// Fresh links to a tracked app's live release straight from Google Play / GitHub, so the phone
+/// can skip this server's slow Wi-Fi (launcher v0.56.0+) - see src/direct.rs. 404 when there's no
+/// direct option right now (manual upload, no fingerprint yet, the source said no or was slow);
+/// the phone then downloads this server's copy as before.
+pub async fn tracked_app_direct(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Extension(AuthedDevice(device)): Extension<AuthedDevice>,
+) -> impl IntoResponse {
+    // Same scoping as tracked_app_updates: only apps this device is meant to install.
+    let app = sqlx::query_as::<_, TrackedApp>(
+        "SELECT ta.* FROM tracked_apps ta \
+         WHERE ta.id = ? AND ta.enabled = 1 \
+         AND (ta.is_launcher = 1 OR EXISTS ( \
+             SELECT 1 FROM device_tracked_apps dta \
+             WHERE dta.device_id = ? AND dta.tracked_app_id = ta.id))",
+    )
+    .bind(id)
+    .bind(device.id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let Some(app) = app else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match crate::direct::direct_links(&state, &app).await {
+        Ok(links) => Json(links).into_response(),
+        Err(why) => {
+            tracing::info!(
+                "no direct download of '{}' for device {}: {why}",
+                app.name,
+                device.id
+            );
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
 }
 
 async fn file_size(path: &str) -> Option<u64> {

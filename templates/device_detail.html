@@ -142,7 +142,7 @@
                 <label class="checkbox-row">
                     <input type="checkbox" name="selected" {% if app.checked %}checked{% endif %} onchange="this.form.submit()">
                     {{ app.label }}
-                    <span class="app-status" data-installing="{{ app.is_installing }}" data-failed="{{ app.install_failed }}" data-awaiting="{{ app.awaiting_install }}"{% if let Some(tid) = app.tracked_app_id %} data-tracked-app-id="{{ tid }}"{% endif %}>{{ app.status_label }}</span>
+                    <span class="app-status" data-installing="{{ app.is_installing }}" data-failed="{{ app.install_failed }}" data-awaiting="{{ app.awaiting_install }}" data-update="{{ app.is_update }}"{% if let Some(tid) = app.tracked_app_id %} data-tracked-app-id="{{ tid }}"{% endif %}>{{ app.status_label }}</span>
                     {% if app.show_no_release_hint %} <span class="subtitle">(no release yet - won't install until one's added)</span>{% endif %}
                 </label>
                 {% if !app.failure_text.is_empty() %}
