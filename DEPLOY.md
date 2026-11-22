@@ -72,7 +72,9 @@ If a kid's phone uses [Molly](https://molly.im/) (a de-Googled Signal fork) and 
     sudo tailscale serve --bg --https=8443 http://127.0.0.1:8020
     ```
 
-3. On the kid's phone, open Molly → Settings → Notifications → change delivery method to **UnifiedPush** → "MollySocket server" → enter `https://<hostname>.<tailnet>.ts.net:8443` → scan the QR code it shows.
+3. On the kid's phone, in **Kids MDM IM**: pick **UnifiedPush** on the first-run "How should new messages arrive?" screen, or later go to Settings → Parental controls → Message delivery → Change. Enter `https://<hostname>.<tailnet>.ts.net:8443` and tap Continue. The same screen then shows "UnifiedPush: working" once MollySocket has registered; until then the app stays connected on its own. No QR code is needed.
+
+   (Plain Molly instead: Settings → Notifications → delivery method **UnifiedPush** → "MollySocket server" → enter the same address → scan the QR code it shows.)
 
 **Updating**: re-run the same install command - it re-downloads the latest binary and restarts the service without touching your config or the accounts already registered.
 
