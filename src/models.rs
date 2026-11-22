@@ -373,6 +373,15 @@ pub struct InstalledApp {
     pub label: String,
     #[serde(default)]
     pub preinstalled: bool,
+    /// False for a preinstalled app that's on the phone but not set up for this user (skipped in
+    /// the phone's own setup, say) - Android shows it nowhere until it's allowed, when launcher
+    /// v0.58.2+ sets it up. Older launchers don't send it, so it defaults to true.
+    #[serde(default = "default_true")]
+    pub installed: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------

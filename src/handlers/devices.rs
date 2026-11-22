@@ -253,6 +253,10 @@ struct InstallStatusEntry {
     source: &'static str,
 }
 
+const PLAY_STORE_PACKAGE: &str = "com.android.vending";
+/// Launcher v0.58.1 - pauses the Play Store instead of hiding it when it isn't allowed.
+const PLAY_STORE_PAUSE_LAUNCHER_VERSION_CODE: i64 = 143;
+
 /// Where the phone said it's downloading from, as shown after the percentage ("Downloading 45%
 /// from Google Play") - so a parent can tell a direct download (launcher v0.56.0+, see
 /// src/direct.rs) from one off this server. Empty for older launchers, which don't say.
@@ -455,6 +459,10 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         })
         .collect();
 
+    let launcher_version_code = latest_status
+        .as_ref()
+        .and_then(|s| s.app_version_code)
+        .unwrap_or(0);
     let mut apps: Vec<UnifiedAppRow> = Vec::new();
     let mut seen_packages: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -470,9 +478,21 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
         let updating = tracked_match
             .and_then(|t| install_progress.get(&t.id))
             .filter(|(percent, failed, _, _)| !failed && *percent < 100);
+        let checked = allowed.contains(&app.package_name);
         apps.push(UnifiedAppRow {
             status_label: match updating {
                 Some((percent, _, _, source)) => format!("Updating {percent}%{source}"),
+                // On the phone but not set up for this user - see InstalledApp::installed.
+                None if !app.installed && checked => "Setting up on the phone…".to_string(),
+                None if !app.installed => "Not set up on the phone".to_string(),
+                // Launcher v0.58.1+ pauses rather than hides it when it's not allowed, so games
+                // can still use it in the background - "Preinstalled" + unticked read as off.
+                None if app.package_name == PLAY_STORE_PACKAGE
+                    && !checked
+                    && launcher_version_code >= PLAY_STORE_PAUSE_LAUNCHER_VERSION_CODE =>
+                {
+                    "Paused - works in the background".to_string()
+                }
                 None if app.preinstalled => "Preinstalled".to_string(),
                 None => "Installed".to_string(),
             },
@@ -481,7 +501,7 @@ pub async fn view_device(State(state): State<AppState>, Path(id): Path<i64>) -> 
             install_failed: false,
             failure_text: String::new(),
             awaiting_install: false,
-            checked: allowed.contains(&app.package_name),
+            checked,
             tracked_app_id: tracked_match.map(|t| t.id),
             show_no_release_hint: false,
             package_name: app.package_name.clone(),
